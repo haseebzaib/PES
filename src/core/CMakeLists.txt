@@ -19,5 +19,6 @@ target_compile_features(pes_core PUBLIC cxx_std_20)
 
 target_link_libraries(pes_core
     PUBLIC
+        pes_ping
         spdlog::spdlog_header_only
 )
