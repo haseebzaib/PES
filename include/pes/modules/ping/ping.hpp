@@ -26,12 +26,24 @@ namespace module::ping
         std::string error_message{};
     };
 
+    struct PingRecord 
+    {
+        std::int64_t timestamp_ms {};
+        std::string target {};
+        std::string resolved_ip {};
+        bool success {false}; 
+        std::optional<double> latency_ms {};
+        bool timeout {false};
+        std::string error_message {};
+        unsigned short sequence_number {};
+    };
+
     class PingModule
     {
     public:
         PingModule();
-        void SetPingHostsCritical(std::vector<std::string> hosts);
-        void SetPingHostsNormal(std::vector<std::string> hosts);
+        void SetPingHosts(std::vector<std::string> hosts);
+        std::vector<PingRecord> ConsumeCompletedRecords();
         void ping_start();
         void ping_stop();
          
@@ -42,8 +54,13 @@ namespace module::ping
         void start_receive();
         void start_send();
 
-        std::vector<std::string> PingHostsCritical;
-        std::vector<std::string> PingHostsNormal;
+        std::vector<PingRecord> CompletedRecords;
+        std::string CurrentTarget;
+        unsigned short CurrentSequenceNumber {0};
+
+        std::vector<std::string> PingHostsList;
+        size_t PingHostListSize;
+        size_t PingHostListRB;
         boost::asio::io_context io_context;
         steady_timer timer_;
         icmp::resolver resolver_;
