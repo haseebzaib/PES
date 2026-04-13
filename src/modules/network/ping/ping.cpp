@@ -14,8 +14,8 @@ namespace module::ping
     {
         PingHostsList = std::move(hosts);
         PingHostListRB = 0;
-        start_send();
-        start_receive();
+        // start_send();
+        // start_receive();
     }
 
     std::vector<PingRecord> PingModule::ConsumeCompletedRecords()
@@ -78,7 +78,7 @@ namespace module::ping
     }
     void PingModule::handle_timeout()
     {
-        if (num_replies_ == 0)
+        if (num_replies_ == 0 && !PingHostsList.empty())
         {
             PingRecord record{};
             record.timestamp_ms =
@@ -110,41 +110,47 @@ namespace module::ping
     {
         if (PingHostsList.empty())
         {
-            return;
+            SPDLOG_WARN("Host list empty");
         }
+        else
+        {
 
-        std::string body("Hello from Metacrust Gateway");
-        CurrentTarget = PingHostsList[PingHostListRB];
-        destination_ = *resolver_.resolve(icmp::v4(), CurrentTarget, "").begin();
-        SPDLOG_INFO("Resolved Target {}", CurrentTarget);
-        PingHostListRB = (PingHostListRB + 1) % PingHostsList.size();
+            std::string body("Hello from Metacrust Gateway");
+            CurrentTarget = PingHostsList[PingHostListRB];
+            destination_ = *resolver_.resolve(icmp::v4(), CurrentTarget, "").begin();
+            SPDLOG_INFO("Resolved Target {}", CurrentTarget);
+            PingHostListRB = (PingHostListRB + 1) % PingHostsList.size();
 
-        // Create an ICMP header for an echo request.
-        icmp_header echo_request;
-        echo_request.type(icmp_header::echo_request);
-        echo_request.code(0);
-        echo_request.identifier(get_identifier());
-        echo_request.sequence_number(++sequence_number_);
-        CurrentSequenceNumber = sequence_number_;
-        compute_checksum(echo_request, body.begin(), body.end());
+            // Create an ICMP header for an echo request.
+            icmp_header echo_request;
+            echo_request.type(icmp_header::echo_request);
+            echo_request.code(0);
+            echo_request.identifier(get_identifier());
+            echo_request.sequence_number(++sequence_number_);
+            CurrentSequenceNumber = sequence_number_;
+            compute_checksum(echo_request, body.begin(), body.end());
 
-        // Encode the request packet.
-        boost::asio::streambuf request_buffer;
-        std::ostream os(&request_buffer);
-        os << echo_request << body;
+            // Encode the request packet.
+            boost::asio::streambuf request_buffer;
+            std::ostream os(&request_buffer);
+            os << echo_request << body;
 
-        // Send the request.
-        time_sent_ = steady_timer::clock_type::now();
-        socket_.send_to(request_buffer.data(), destination_);
+            // Send the request.
+
+            socket_.send_to(request_buffer.data(), destination_);
+        }
 
         // Wait up to five seconds for a reply.
         num_replies_ = 0;
+        time_sent_ = steady_timer::clock_type::now();
         timer_.expires_at(time_sent_ + chrono::seconds(5));
         timer_.async_wait(std::bind(&PingModule::handle_timeout, this));
     }
 
     void PingModule::ping_start()
     {
+        start_send();
+        start_receive();
         io_context.run();
     }
 

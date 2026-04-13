@@ -1,5 +1,6 @@
 add_library(pes_core
     application.cpp
+    networking_thread.cpp
 )
 
 target_include_directories(pes_core

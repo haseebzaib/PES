@@ -1,1 +1,1 @@
-add_subdirectory(ping)
+add_subdirectory(network/ping)
