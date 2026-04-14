@@ -19,6 +19,7 @@ add_subdirectory(src/core)
 add_subdirectory(apps/pes_main)
 add_subdirectory(third_party/spdlog)
 add_subdirectory(src/modules)
+add_subdirectory(src/storage)
 
 if(PES_BUILD_TESTS AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt)
     enable_testing()
