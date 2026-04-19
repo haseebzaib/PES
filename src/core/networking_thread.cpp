@@ -17,6 +17,8 @@ namespace core
 
         ping_module.SetPingHosts(ping_hosts);
 
+               SPDLOG_INFO("STARTED");
+
         while (1)
         {
             auto records = ping_module.ConsumeCompletedRecords();
@@ -26,7 +28,6 @@ namespace core
                 // save record to sqlite
             }
 
-             SPDLOG_INFO("Application started");
              std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
     }

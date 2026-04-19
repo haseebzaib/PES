@@ -1,6 +1,7 @@
 add_library(pes_core
     application.cpp
     networking_thread.cpp
+    sensor_thread.cpp
 )
 
 target_include_directories(pes_core
@@ -21,5 +22,6 @@ target_compile_features(pes_core PUBLIC cxx_std_20)
 target_link_libraries(pes_core
     PUBLIC
         pes_ping
+        pes_protocols
         spdlog::spdlog_header_only
 )
