@@ -110,7 +110,7 @@ namespace module::ping
     {
         if (PingHostsList.empty())
         {
-            SPDLOG_WARN("Host list empty");
+            //SPDLOG_WARN("Host list empty");
         }
         else
         {
