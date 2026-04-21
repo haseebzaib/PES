@@ -12,7 +12,10 @@ namespace core
 
     module::protocols::serial::serialConfig rs232CfgCh0{
         .devicePath_ = "/dev/ttyAMA2",
-        .baudRate_ = 1200};
+        .baudRate_ = 9600,
+        .startupSettleDelayMs_ = 250,
+        .txPostWriteDelayMs_ = 0,
+        .rxTimeoutMs_ = 500};
     module::protocols::serial::serialPort portRs232Ch0;
 
     module::protocols::serial::serialConfig rs232CfgCh1{
@@ -51,8 +54,17 @@ namespace core
         portRs485Ch3.open(rs485CfgCh3);
 
         drx85xx[0].init(portRs232Ch0);
-
-
+        module::drivers::dustrak::drx85xx::driverConfig dustTrakCfg;
+        dustTrakCfg.polling.readIdentityOnInit = true;
+        dustTrakCfg.polling.pollStatus = true;
+        dustTrakCfg.polling.autoStartMeasurement = false;
+        dustTrakCfg.polling.pollMeasurements = true;
+        dustTrakCfg.polling.pollMeasurementStats = false;
+        dustTrakCfg.polling.pollFaultMessages = false;
+        dustTrakCfg.polling.pollAlarmMessages = false;
+        dustTrakCfg.polling.pollLogInfo = false;
+        dustTrakCfg.updateRamAfterWrite = true;
+        drx85xx[0].configure(dustTrakCfg);
 
         while (1)
         {
@@ -62,7 +74,6 @@ namespace core
             drx85xx[0].loop(json_packet);
 
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
         }
     }
 

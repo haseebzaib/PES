@@ -1,5 +1,3 @@
-find_package(Boost REQUIRED COMPONENTS system)
-
 add_library(pes_drivers
     dustrak/drx_85xx.cpp
 )
@@ -13,7 +11,6 @@ target_compile_features(pes_drivers PUBLIC cxx_std_20)
 
 target_link_libraries(pes_drivers
     PUBLIC
-        Boost::system
         pes_protocols
         spdlog::spdlog_header_only
 )

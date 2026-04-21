@@ -1,36 +1,45 @@
-#pragma once 
+#pragma once
 
-#include "boost/asio.hpp"
-#include "cstdint"
-#include "string"
-#include "vector"
-#include <istream>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
 
+namespace LibSerial
+{
+    class SerialPort;
+}
 
-namespace module::protocols::serial {
+namespace module::protocols::serial
+{
 
-    enum class parity {
+    enum class parity
+    {
         None,
         Even,
         Odd,
     };
 
-    enum class stopBits {
+    enum class stopBits
+    {
         One,
         Two,
     };
 
-    struct serialConfig {
+    struct serialConfig
+    {
         std::string devicePath_ {};
         unsigned int baudRate_ {115200};
         unsigned int charSize_ {8};
         parity parity_ {parity::None};
         stopBits stopBit_ {stopBits::One};
+        unsigned int startupSettleDelayMs_ {0};
+        unsigned int txPostWriteDelayMs_ {0};
+        unsigned int rxTimeoutMs_ {300};
     };
-    
-    
-    class serialPort {
 
+    class serialPort
+    {
         public:
         serialPort();
         ~serialPort();
@@ -47,20 +56,16 @@ namespace module::protocols::serial {
 
         bool read_line(std::string& outLine);
         bool read_some(std::vector<std::uint8_t>& outData, std::size_t maxBytes);
+        void flush_rx();
 
         private:
         bool apply_config(const serialConfig& serialConfig);
+        void flush_input();
 
-        boost::asio::io_context boostIoContext_ {};
-        boost::asio::serial_port boostSerialPort_ {boostIoContext_};
-        boost::asio::streambuf readStreamBuffer_;
-
-
-
-
+        std::unique_ptr<LibSerial::SerialPort> port_ {};
+        std::string readBuffer_ {};
+        unsigned int txPostWriteDelayMs_ {0};
+        unsigned int rxTimeoutMs_ {300};
     };
-
-
-
 
 }
