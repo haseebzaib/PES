@@ -23,5 +23,6 @@ target_link_libraries(pes_core
     PUBLIC
         pes_ping
         pes_protocols
+        pes_drivers
         spdlog::spdlog_header_only
 )

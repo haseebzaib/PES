@@ -1,11 +1,22 @@
 #include "pes/modules/protocols/serial/serial.hpp"
 #include <boost/asio/read_until.hpp>
 #include <boost/asio/write.hpp>
+#include <boost/asio/steady_timer.hpp>
 #include "spdlog/spdlog.h"
+#include <chrono>
+#include <fcntl.h>
 #include <istream>
+#include <termios.h>
+#include <unistd.h>
 
 namespace module::protocols::serial
 {
+
+    // Kernel serial driver buffers incoming bytes as they arrive over the wire.
+    // By the time read_line() is called the response is already queued, so a
+    // short deadline is sufficient.  If nothing arrives within this window the
+    // sensor is considered unresponsive and the caller retries on the next cycle.
+    static constexpr std::chrono::milliseconds READ_LINE_TIMEOUT{300};
 
     serialPort::serialPort() = default;
 
@@ -62,6 +73,19 @@ namespace module::protocols::serial
         return boostSerialPort_.is_open();
     }
 
+    // boost::asio sets the fd to O_NONBLOCK when the first async operation is
+    // started, and it stays non-blocking after run()/restart().  Synchronous
+    // write() on a non-blocking fd can fail with EAGAIN or send partial frames,
+    // which causes the emulator to receive fragmented commands (e.g. "POLL"
+    // instead of "ASPOLL").  Force blocking mode for the duration of each write.
+    static void set_blocking(int fd, bool blocking)
+    {
+        int flags = ::fcntl(fd, F_GETFL, 0);
+        if (flags == -1) return;
+        flags = blocking ? (flags & ~O_NONBLOCK) : (flags | O_NONBLOCK);
+        ::fcntl(fd, F_SETFL, flags);
+    }
+
     bool serialPort::write(const std::string &data)
     {
         if (!is_open())
@@ -70,8 +94,13 @@ namespace module::protocols::serial
             return false;
         }
 
+        int fd = boostSerialPort_.native_handle();
+        set_blocking(fd, true);
+
         boost::system::error_code ec;
         boost::asio::write(boostSerialPort_, boost::asio::buffer(data), ec);
+
+        set_blocking(fd, false);
 
         if (ec)
         {
@@ -90,8 +119,13 @@ namespace module::protocols::serial
             return false;
         }
 
+        int fd = boostSerialPort_.native_handle();
+        set_blocking(fd, true);
+
         boost::system::error_code ec;
         boost::asio::write(boostSerialPort_, boost::asio::buffer(data), ec);
+
+        set_blocking(fd, false);
 
         if (ec)
         {
@@ -112,14 +146,38 @@ namespace module::protocols::serial
             return false;
         }
 
-        //boost::asio::streambuf buffer;
-        boost::system::error_code ec;
+        bool timed_out = false;
+        boost::system::error_code read_ec;
 
-        boost::asio::read_until(boostSerialPort_, readStreamBuffer_, '\n', ec);
+        boost::asio::steady_timer timer(boostIoContext_);
+        timer.expires_after(READ_LINE_TIMEOUT);
 
-        if (ec)
+        timer.async_wait([&](const boost::system::error_code &ec) {
+            if (!ec)
+            {
+                timed_out = true;
+                boostSerialPort_.cancel();
+            }
+        });
+
+        boost::asio::async_read_until(boostSerialPort_, readStreamBuffer_, '\n',
+            [&](const boost::system::error_code &ec, std::size_t) {
+                read_ec = ec;
+                timer.cancel();
+            });
+
+        boostIoContext_.run();
+        boostIoContext_.restart();
+
+        if (timed_out)
         {
-            SPDLOG_ERROR("Serial read_until failed: {}", ec.message());
+            //SPDLOG_WARN("read_line timed out (no data within {}ms)", READ_LINE_TIMEOUT.count());
+            return false;
+        }
+
+        if (read_ec)
+        {
+            SPDLOG_ERROR("Serial read_until failed: {}", read_ec.message());
             return false;
         }
 
