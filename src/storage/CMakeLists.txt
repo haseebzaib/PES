@@ -2,6 +2,7 @@ find_package(SQLite3 REQUIRED)
 
 add_library(pes_storage
     ping_storage.cpp
+    redis_storage.cpp
 )
 
 target_include_directories(pes_storage
