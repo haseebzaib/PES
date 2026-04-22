@@ -14,8 +14,8 @@ namespace core
         .devicePath_ = "/dev/ttyAMA2",
         .baudRate_ = 9600,
         .startupSettleDelayMs_ = 250,
-        .txPostWriteDelayMs_ = 0,
-        .rxTimeoutMs_ = 500};
+        .txPostWriteDelayMs_ = 250,
+        .rxTimeoutMs_ = 1000};
     module::protocols::serial::serialPort portRs232Ch0;
 
     module::protocols::serial::serialConfig rs232CfgCh1{

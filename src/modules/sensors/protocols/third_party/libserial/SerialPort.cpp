@@ -2339,8 +2339,12 @@ namespace LibSerial
                     }
                 }
             }
-            else if ((read_result <= 0) and
-                     (errno != EWOULDBLOCK))
+            // With VMIN=0/VTIME=0, read() may legitimately return 0 when no
+            // byte is ready yet. Treat that as "try again", not as a fatal
+            // error with stale errno such as "Success".
+            else if ((read_result < 0) and
+                     (errno != EWOULDBLOCK) and
+                     (errno != EAGAIN))
             {
                 throw std::runtime_error(std::strerror(errno)) ;
             }
@@ -2433,8 +2437,12 @@ namespace LibSerial
                     }
                 }
             }
-            else if (read_result <= 0 &&
-                     errno != EWOULDBLOCK)
+            // With VMIN=0/VTIME=0, read() may legitimately return 0 when no
+            // byte is ready yet. Treat that as "try again", not as a fatal
+            // error with stale errno such as "Success".
+            else if (read_result < 0 &&
+                     errno != EWOULDBLOCK &&
+                     errno != EAGAIN)
             {
                 throw std::runtime_error(std::strerror(errno)) ;
             }
@@ -2499,8 +2507,12 @@ namespace LibSerial
                 break ;
             }
 
-            if ((read_result <= 0) and
-                (errno != EWOULDBLOCK))
+            // With VMIN=0/VTIME=0, read() may legitimately return 0 when no
+            // byte is ready yet. Treat that as "try again", not as a fatal
+            // error with stale errno such as "Success".
+            if ((read_result < 0) and
+                (errno != EWOULDBLOCK) and
+                (errno != EAGAIN))
             {
                 throw std::runtime_error(std::strerror(errno)) ;
             }
