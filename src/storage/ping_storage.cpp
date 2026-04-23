@@ -3,7 +3,7 @@
 #include <spdlog/spdlog.h>
 #include <sqlite3.h>
 
-namespace pes::storage
+namespace storage
 {
 
 namespace

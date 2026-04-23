@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-namespace pes::storage
+namespace storage
 {
 
     template <typename T>

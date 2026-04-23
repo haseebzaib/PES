@@ -7,7 +7,7 @@ namespace core
 {
 
     extern module::ping::PingModule ping_module;
-    extern pes::storage::RedisStorage redis_storage;
+    extern storage::RedisStorage redis_storage;
 
     extern std::jthread NetworkThread;
     

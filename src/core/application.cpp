@@ -10,7 +10,7 @@ namespace core
 {
 
   module::ping::PingModule ping_module;
-  pes::storage::RedisStorage redis_storage({
+  storage::RedisStorage redis_storage({
     .host = "127.0.0.1",
     .port = 6379,
     .database = 0,

@@ -2,6 +2,8 @@
 #include "pes/core/sensor_thread.hpp"
 #include "pes/modules/protocols/serial/serial.hpp"
 #include "pes/modules/drivers/dustrak/drx_85xx.hpp"
+#include "pes/utils/file/file_reader.hpp"
+#include "pes/utils/file/json_file.hpp"
 #include "spdlog/spdlog.h"
 #include "vector"
 #include <thread>
@@ -65,6 +67,11 @@ namespace core
         dustTrakCfg.polling.pollLogInfo = false;
         dustTrakCfg.updateRamAfterWrite = true;
         drx85xx[0].configure(dustTrakCfg);
+
+
+        utils::file::jsonFile::json json_file = utils::file::jsonFile::load("/opt/gateway/software_storage/AES/rs232_config.json").value_or("");
+
+         SPDLOG_INFO("File Data : {}", json_file);
 
         while (1)
         {

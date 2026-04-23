@@ -25,5 +25,6 @@ target_link_libraries(pes_core
         pes_protocols
         pes_drivers
         pes_storage
+        pes_utils
         spdlog::spdlog_header_only
 )

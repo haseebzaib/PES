@@ -13,7 +13,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-namespace pes::storage
+namespace storage
 {
 
 namespace

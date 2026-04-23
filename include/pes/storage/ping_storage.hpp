@@ -10,7 +10,7 @@
 
 struct sqlite3;
 
-namespace pes::storage
+namespace storage
 {
 
 class PingStorage
