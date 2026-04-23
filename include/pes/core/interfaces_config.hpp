@@ -26,6 +26,6 @@ namespace core
 
     extern module::drivers::dustrak::drx85xx drx85xx[2];
 
-    void sensor_thread();
+    void interface_configs_init();
 
 }

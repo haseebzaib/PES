@@ -32,7 +32,7 @@ namespace core
     std::jthread NetworkThread(network_thread);
     std::jthread SensorThread(sensor_thread);
    
-    ping_module.ping_start();
+    //ping_module.ping_start();
 
 
 

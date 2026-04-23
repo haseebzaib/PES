@@ -13,23 +13,22 @@ namespace core
 {
 
     module::protocols::serial::serialConfig rs232CfgCh0{
-        .devicePath_ = "/dev/ttyAMA2",
-        .baudRate_ = 9600,
-        .startupSettleDelayMs_ = 250,
-        .txPostWriteDelayMs_ = 250,
-        .rxTimeoutMs_ = 1000};
+        // .devicePath_ = "/dev/ttyAMA2",
+        // .baudRate_ = 9600,
+        // .startupSettleDelayMs_ = 250,
+        // .txPostWriteDelayMs_ = 500,
+        // .rxTimeoutMs_ = 1000
+    
+    };
     module::protocols::serial::serialPort portRs232Ch0;
 
-    module::protocols::serial::serialConfig rs232CfgCh1{
-        .devicePath_ = "/dev/ttyAMA3"};
+    module::protocols::serial::serialConfig rs232CfgCh1{};
     module::protocols::serial::serialPort portRs232Ch1;
 
-    module::protocols::serial::serialConfig rs485CfgCh2{
-        .devicePath_ = "/dev/ttyAMA4"};
+    module::protocols::serial::serialConfig rs485CfgCh2{};
     module::protocols::serial::serialPort portRs485Ch2;
 
-    module::protocols::serial::serialConfig rs485CfgCh3{
-        .devicePath_ = "/dev/ttyAMA0"};
+    module::protocols::serial::serialConfig rs485CfgCh3{};
     module::protocols::serial::serialPort portRs485Ch3;
 
 
@@ -55,23 +54,20 @@ namespace core
         portRs485Ch2.open(rs485CfgCh2);
         portRs485Ch3.open(rs485CfgCh3);
 
-        drx85xx[0].init(portRs232Ch0);
-        module::drivers::dustrak::drx85xx::driverConfig dustTrakCfg;
-        dustTrakCfg.polling.readIdentityOnInit = true;
-        dustTrakCfg.polling.pollStatus = true;
-        dustTrakCfg.polling.autoStartMeasurement = false;
-        dustTrakCfg.polling.pollMeasurements = true;
-        dustTrakCfg.polling.pollMeasurementStats = false;
-        dustTrakCfg.polling.pollFaultMessages = false;
-        dustTrakCfg.polling.pollAlarmMessages = false;
-        dustTrakCfg.polling.pollLogInfo = false;
-        dustTrakCfg.updateRamAfterWrite = true;
-        drx85xx[0].configure(dustTrakCfg);
+        // drx85xx[0].init(portRs232Ch0);
+        // module::drivers::dustrak::drx85xx::driverConfig dustTrakCfg;
+        // dustTrakCfg.polling.readIdentityOnInit = true;
+        // dustTrakCfg.polling.pollStatus = true;
+        // dustTrakCfg.polling.autoStartMeasurement = false;
+        // dustTrakCfg.polling.pollMeasurements = true;
+        // dustTrakCfg.polling.pollMeasurementStats = false;
+        // dustTrakCfg.polling.pollFaultMessages = false;
+        // dustTrakCfg.polling.pollAlarmMessages = false;
+        // dustTrakCfg.polling.pollLogInfo = false;
+        // dustTrakCfg.updateRamAfterWrite = true;
+        // drx85xx[0].configure(dustTrakCfg);
 
 
-        utils::file::jsonFile::json json_file = utils::file::jsonFile::load("/opt/gateway/software_storage/AES/rs232_config.json").value_or("");
-
-         SPDLOG_INFO("File Data : {}", json_file);
 
         while (1)
         {
