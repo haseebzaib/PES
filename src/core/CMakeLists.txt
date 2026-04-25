@@ -1,5 +1,6 @@
 add_library(pes_core
     application.cpp
+    interfaces.cpp
     networking_thread.cpp
     sensor_thread.cpp
 )

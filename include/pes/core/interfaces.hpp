@@ -15,6 +15,7 @@ namespace core
     constexpr std::string_view rs485Ch3Path = "/dev/ttyAMA0";
 
     constexpr std::string_view rs232ConfigRedisKey = "rs232_config";
+    constexpr std::string_view rs232ConfigFile = "/opt/gateway/software_storage/AES/rs232_config.json";
 
     enum class sensorKind
     {
@@ -43,7 +44,7 @@ namespace core
             TOTAL,
         };
         std::array<bool, 4> enabled;
-        module::drivers::dustrak::drx85xx::alarmConfig alarmConfig;
+        std::array<module::drivers::dustrak::drx85xx::alarmConfig, 5> alarmConfigs;
         module::drivers::dustrak::drx85xx::analogOutputConfig analogOutputConfig;
         module::drivers::dustrak::drx85xx::loggingModeConfig loggingModeConfig;
         module::drivers::dustrak::drx85xx::userCalibrationConfig userCalibrationConfig;
@@ -72,7 +73,7 @@ namespace core
         module::drivers::dustrak::drx85xx dustTrak;
     };
 
-    std::array<sensorRuntime, 4> sensors;
+    extern std::array<sensorRuntime, 4> sensors;
 
 
 
