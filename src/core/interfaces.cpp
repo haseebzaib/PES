@@ -7,6 +7,7 @@
 #include "pes/utils/file/json_file.hpp"
 #include "spdlog/spdlog.h"
 #include "vector"
+#include <cmath>
 #include <thread>
 #include "cstdlib"
 
@@ -103,8 +104,55 @@ namespace core
         return std::nullopt;
     }
 
+    static constexpr std::size_t runtime_config_index(sensorDustrakRuntimeConfigs::runTimeConfig config)
+    {
+        return static_cast<std::size_t>(config);
+    }
+
+    static bool alarm_config_active(const module::drivers::dustrak::drx85xx::alarmConfig &config)
+    {
+        using alarmState = module::drivers::dustrak::drx85xx::alarmState;
+
+        return config.alarm1State != alarmState::Off || config.alarm2State != alarmState::Off || config.stelAlarm1Enabled;
+    }
+
+    static bool nearly_equal(double left, double right)
+    {
+        return std::fabs(left - right) <= 0.000001;
+    }
+
+    static bool alarm_configs_equal(
+        const module::drivers::dustrak::drx85xx::alarmConfig &expected,
+        const module::drivers::dustrak::drx85xx::alarmConfig &actual)
+    {
+        return expected.alarm1State == actual.alarm1State && nearly_equal(expected.alarm1ValueMgPerM3, actual.alarm1ValueMgPerM3) && expected.stelAlarm1Enabled == actual.stelAlarm1Enabled && expected.alarm2State == actual.alarm2State && nearly_equal(expected.alarm2ValueMgPerM3, actual.alarm2ValueMgPerM3);
+    }
+
+    static bool analog_output_configs_equal(
+        const module::drivers::dustrak::drx85xx::analogOutputConfig &expected,
+        const module::drivers::dustrak::drx85xx::analogOutputConfig &actual)
+    {
+        return expected.outputState == actual.outputState && expected.outputChannel == actual.outputChannel && nearly_equal(expected.minimumRangeMgPerM3, actual.minimumRangeMgPerM3) && nearly_equal(expected.maximumRangeMgPerM3, actual.maximumRangeMgPerM3);
+    }
+
+    static bool logging_mode_configs_equal(
+        const module::drivers::dustrak::drx85xx::loggingModeConfig &expected,
+        const module::drivers::dustrak::drx85xx::loggingModeConfig &actual)
+    {
+        return expected.startTime == actual.startTime && expected.startDate == actual.startDate && expected.interval == actual.interval && expected.testLength == actual.testLength && expected.numberOfTests == actual.numberOfTests && expected.timeBetweenTests == actual.timeBetweenTests && expected.timeConstant == actual.timeConstant && expected.useStartTime == actual.useStartTime && expected.useStartDate == actual.useStartDate && expected.autoZeroInterval == actual.autoZeroInterval && expected.autoZeroEnabled == actual.autoZeroEnabled && expected.programName == actual.programName;
+    }
+
+    static bool user_calibration_configs_equal(
+        const module::drivers::dustrak::drx85xx::userCalibrationConfig &expected,
+        const module::drivers::dustrak::drx85xx::userCalibrationConfig &actual)
+    {
+        return expected.index == actual.index && nearly_equal(expected.sizeCorrectionFactor, actual.sizeCorrectionFactor) && nearly_equal(expected.photometricCalibrationFactor, actual.photometricCalibrationFactor) && expected.name == actual.name;
+    }
+
     static void dustrakConfig(const utils::file::jsonFile::json &portJson, sensorDustrakConfigs &config, std::string_view portName)
     {
+        using runTimeConfig = sensorDustrakRuntimeConfigs::runTimeConfig;
+
         const utils::file::jsonFile::json dustrakJson = portJson.value("dustrak", utils::file::jsonFile::json::object());
         const utils::file::jsonFile::json pollingJson = dustrakJson.value("polling", utils::file::jsonFile::json::object());
         const utils::file::jsonFile::json driverJson = dustrakJson.value("driver", utils::file::jsonFile::json::object());
@@ -119,6 +167,8 @@ namespace core
         driverConfig.polling.pollAlarmMessages = pollingJson.value("poll_alarm_messages", false);
         driverConfig.polling.pollLogInfo = pollingJson.value("poll_log_info", false);
         driverConfig.updateRamAfterWrite = driverJson.value("update_ram_after_write", true);
+
+        config.runTimeConfigs.enabled.fill(false);
 
         constexpr std::array<std::string_view, 5> alarmKeys{{
             "pm1",
@@ -139,6 +189,11 @@ namespace core
             alarmConfig.stelAlarm1Enabled = alarmJson.value("stel_alarm1_enabled", false);
             alarmConfig.alarm2State = parse_alarm_state(alarmJson.value("alarm2_state", "off"));
             alarmConfig.alarm2ValueMgPerM3 = alarmJson.value("alarm2_mg_per_m3", 0.0);
+
+            if (alarm_config_active(alarmConfig))
+            {
+                config.runTimeConfigs.enabled[runtime_config_index(runTimeConfig::alarmconfig)] = true;
+            }
         }
 
         const utils::file::jsonFile::json analogJson = dustrakJson.value("analog_output", utils::file::jsonFile::json::object());
@@ -152,9 +207,11 @@ namespace core
         }
         analogOutputConfig.minimumRangeMgPerM3 = analogJson.value("min_mg_per_m3", 0.0);
         analogOutputConfig.maximumRangeMgPerM3 = analogJson.value("max_mg_per_m3", 1.0);
+        config.runTimeConfigs.enabled[runtime_config_index(runTimeConfig::analogoutputconfig)] =
+            analogOutputConfig.outputState != module::drivers::dustrak::drx85xx::analogOutputState::Off;
 
         SPDLOG_INFO(
-            "Loaded DustTrak config port={} read_identity={} poll_status={} auto_start={} poll_measurements={} poll_stats={} poll_faults={} poll_alarms={} poll_log={} update_ram={} analog_min={} analog_max={}",
+            "Loaded DustTrak config port={} read_identity={} poll_status={} auto_start={} poll_measurements={} poll_stats={} poll_faults={} poll_alarms={} poll_log={} update_ram={} pending_alarm={} pending_analog={} pending_logging={} pending_user_cal={} analog_min={} analog_max={}",
             portName,
             driverConfig.polling.readIdentityOnInit,
             driverConfig.polling.pollStatus,
@@ -165,6 +222,10 @@ namespace core
             driverConfig.polling.pollAlarmMessages,
             driverConfig.polling.pollLogInfo,
             driverConfig.updateRamAfterWrite,
+            config.runTimeConfigs.enabled[runtime_config_index(runTimeConfig::alarmconfig)],
+            config.runTimeConfigs.enabled[runtime_config_index(runTimeConfig::analogoutputconfig)],
+            config.runTimeConfigs.enabled[runtime_config_index(runTimeConfig::loggingmodeconfig)],
+            config.runTimeConfigs.enabled[runtime_config_index(runTimeConfig::usercalibrationconfig)],
             analogOutputConfig.minimumRangeMgPerM3,
             analogOutputConfig.maximumRangeMgPerM3);
     }
@@ -185,7 +246,6 @@ namespace core
                 SPDLOG_ERROR("Failed to reset Redis key '{}'", rs232ConfigRedisKey);
                 return false;
             }
-
         }
 
         std::optional<utils::file::jsonFile::json> json_file = utils::file::jsonFile::load(rs232ConfigFile);
@@ -339,6 +399,168 @@ namespace core
         }
     }
 
+    static bool send_dustrak_alarm_configs(sensorRuntime &runtime)
+    {
+        constexpr std::array<module::drivers::dustrak::drx85xx::channel, 5> alarmChannels{{
+            module::drivers::dustrak::drx85xx::channel::PM1,
+            module::drivers::dustrak::drx85xx::channel::PM25,
+            module::drivers::dustrak::drx85xx::channel::RespirablePM4,
+            module::drivers::dustrak::drx85xx::channel::PM10,
+            module::drivers::dustrak::drx85xx::channel::Total,
+        }};
+
+        for (std::size_t index = 0; index < alarmChannels.size(); ++index)
+        {
+            if (!alarm_config_active(runtime.config.sensorDustrakConfig.runTimeConfigs.alarmConfigs[index]))
+            {
+                continue;
+            }
+
+            if (!runtime.dustTrak.write_alarm_settings(
+                    alarmChannels[index],
+                    runtime.config.sensorDustrakConfig.runTimeConfigs.alarmConfigs[index]))
+            {
+                SPDLOG_WARN("DustTrak alarm runtime config send failed slot={} channel_index={}", runtime.config.name, index);
+                return false;
+            }
+
+            module::drivers::dustrak::drx85xx::alarmConfig readBackConfig;
+            if (!runtime.dustTrak.read_alarm_settings(alarmChannels[index], readBackConfig))
+            {
+                SPDLOG_WARN("DustTrak alarm runtime config read-back failed slot={} channel_index={}", runtime.config.name, index);
+                return false;
+            }
+
+            if (!alarm_configs_equal(runtime.config.sensorDustrakConfig.runTimeConfigs.alarmConfigs[index], readBackConfig))
+            {
+                SPDLOG_WARN("DustTrak alarm runtime config verification mismatch slot={} channel_index={}", runtime.config.name, index);
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    static void handle_dustrak_runtime_config(sensorRuntime &runtime)
+    {
+        using runTimeConfig = sensorDustrakRuntimeConfigs::runTimeConfig;
+
+        auto &runTimeConfigs = runtime.config.sensorDustrakConfig.runTimeConfigs;
+
+        if (runTimeConfigs.enabled[runtime_config_index(runTimeConfig::alarmconfig)])
+        {
+            if (send_dustrak_alarm_configs(runtime))
+            {
+                runTimeConfigs.enabled[runtime_config_index(runTimeConfig::alarmconfig)] = false;
+                SPDLOG_INFO("DustTrak alarm runtime config applied and verified slot={}", runtime.config.name);
+            }
+        }
+
+        if (runTimeConfigs.enabled[runtime_config_index(runTimeConfig::analogoutputconfig)])
+        {
+            if (runtime.dustTrak.write_analog_output_settings(runTimeConfigs.analogOutputConfig))
+            {
+                module::drivers::dustrak::drx85xx::analogOutputConfig readBackConfig;
+                if (runtime.dustTrak.read_analog_output_settings(readBackConfig) && analog_output_configs_equal(runTimeConfigs.analogOutputConfig, readBackConfig))
+                {
+                    runTimeConfigs.enabled[runtime_config_index(runTimeConfig::analogoutputconfig)] = false;
+                    SPDLOG_INFO("DustTrak analog output runtime config applied and verified slot={}", runtime.config.name);
+                }
+                else
+                {
+                    SPDLOG_WARN("DustTrak analog output runtime config verification failed slot={}", runtime.config.name);
+                }
+            }
+            else
+            {
+                SPDLOG_WARN("DustTrak analog output runtime config send failed slot={}", runtime.config.name);
+            }
+        }
+
+        if (runTimeConfigs.enabled[runtime_config_index(runTimeConfig::loggingmodeconfig)])
+        {
+            constexpr auto loggingProgram = module::drivers::dustrak::drx85xx::loggingProgram::Program1;
+
+            if (runtime.dustTrak.write_logging_mode(
+                    loggingProgram,
+                    runTimeConfigs.loggingModeConfig))
+            {
+                module::drivers::dustrak::drx85xx::loggingModeConfig readBackConfig;
+                if (runtime.dustTrak.read_logging_mode(loggingProgram, readBackConfig) && logging_mode_configs_equal(runTimeConfigs.loggingModeConfig, readBackConfig))
+                {
+                    runTimeConfigs.enabled[runtime_config_index(runTimeConfig::loggingmodeconfig)] = false;
+                    SPDLOG_INFO("DustTrak logging mode runtime config applied and verified slot={}", runtime.config.name);
+                }
+                else
+                {
+                    SPDLOG_WARN("DustTrak logging mode runtime config verification failed slot={}", runtime.config.name);
+                }
+            }
+            else
+            {
+                SPDLOG_WARN("DustTrak logging mode runtime config send failed slot={}", runtime.config.name);
+            }
+        }
+
+        if (runTimeConfigs.enabled[runtime_config_index(runTimeConfig::usercalibrationconfig)])
+        {
+            if (runtime.dustTrak.write_user_calibration(
+                    runTimeConfigs.userCalibrationConfig.index,
+                    runTimeConfigs.userCalibrationConfig))
+            {
+                module::drivers::dustrak::drx85xx::userCalibrationConfig readBackConfig;
+                if (runtime.dustTrak.read_user_calibration(runTimeConfigs.userCalibrationConfig.index, readBackConfig) && user_calibration_configs_equal(runTimeConfigs.userCalibrationConfig, readBackConfig))
+                {
+                    runTimeConfigs.enabled[runtime_config_index(runTimeConfig::usercalibrationconfig)] = false;
+                    SPDLOG_INFO("DustTrak user calibration runtime config applied and verified slot={}", runtime.config.name);
+                }
+                else
+                {
+                    SPDLOG_WARN("DustTrak user calibration runtime config verification failed slot={}", runtime.config.name);
+                }
+            }
+            else
+            {
+                SPDLOG_WARN("DustTrak user calibration runtime config send failed slot={}", runtime.config.name);
+            }
+        }
+    }
+
+    static void run_sensor_loop()
+    {
+        std::string sensorPacket;
+
+        for (sensorRuntime &runtime : sensors)
+        {
+            if (!runtime.config.enabled)
+            {
+                continue;
+            }
+
+            switch (runtime.config.sensorKind_)
+            {
+            case sensorKind::dustrak:
+            {
+                runtime.dustTrak.loop(sensorPacket);
+                handle_dustrak_runtime_config(runtime);
+                break;
+            }
+
+            case sensorKind::None:
+            {
+                break;
+            }
+
+            case sensorKind::TOTAL:
+            default:
+            {
+                SPDLOG_WARN("Unsupported sensor loop slot={}", runtime.config.name);
+                break;
+            }
+            }
+        }
+    }
+
     void interfaces_startup()
     {
         if (read_rs232_config(true))
@@ -353,6 +575,8 @@ namespace core
         {
             rs232_init();
         }
+
+        run_sensor_loop();
     }
 
 }
