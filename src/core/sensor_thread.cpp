@@ -4,6 +4,7 @@
 #include "pes/modules/drivers/dustrak/drx_85xx.hpp"
 #include "pes/utils/file/file_reader.hpp"
 #include "pes/utils/file/json_file.hpp"
+#include "pes/core/interfaces.hpp"
 #include "spdlog/spdlog.h"
 #include "vector"
 #include <thread>
@@ -12,29 +13,8 @@
 namespace core
 {
 
-    module::protocols::serial::serialConfig rs232CfgCh0{
-        // .devicePath_ = "/dev/ttyAMA2",
-        // .baudRate_ = 9600,
-        // .startupSettleDelayMs_ = 250,
-        // .txPostWriteDelayMs_ = 500,
-        // .rxTimeoutMs_ = 1000
-    
-    };
-    module::protocols::serial::serialPort portRs232Ch0;
+   
 
-    module::protocols::serial::serialConfig rs232CfgCh1{};
-    module::protocols::serial::serialPort portRs232Ch1;
-
-    module::protocols::serial::serialConfig rs485CfgCh2{};
-    module::protocols::serial::serialPort portRs485Ch2;
-
-    module::protocols::serial::serialConfig rs485CfgCh3{};
-    module::protocols::serial::serialPort portRs485Ch3;
-
-
-    module::drivers::dustrak::drx85xx drx85xx[2];
-
-    std::string json_packet;
 
     void toggle_led()
     {
@@ -49,33 +29,14 @@ namespace core
 
         SPDLOG_INFO("STARTED");
 
-        portRs232Ch0.open(rs232CfgCh0);
-        portRs232Ch1.open(rs232CfgCh1);
-        portRs485Ch2.open(rs485CfgCh2);
-        portRs485Ch3.open(rs485CfgCh3);
-
-        // drx85xx[0].init(portRs232Ch0);
-        // module::drivers::dustrak::drx85xx::driverConfig dustTrakCfg;
-        // dustTrakCfg.polling.readIdentityOnInit = true;
-        // dustTrakCfg.polling.pollStatus = true;
-        // dustTrakCfg.polling.autoStartMeasurement = false;
-        // dustTrakCfg.polling.pollMeasurements = true;
-        // dustTrakCfg.polling.pollMeasurementStats = false;
-        // dustTrakCfg.polling.pollFaultMessages = false;
-        // dustTrakCfg.polling.pollAlarmMessages = false;
-        // dustTrakCfg.polling.pollLogInfo = false;
-        // dustTrakCfg.updateRamAfterWrite = true;
-        // drx85xx[0].configure(dustTrakCfg);
+        interfaces_startup();
 
 
 
         while (1)
         {
-
             toggle_led();
-
-            drx85xx[0].loop(json_packet);
-
+            interfaces_loop();
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
     }
