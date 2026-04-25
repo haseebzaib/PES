@@ -1,10 +1,13 @@
 #pragma once
 
 #include "pes/modules/protocols/serial/serial.hpp"
+#include "pes/modules/protocols/modbus/modbus_client.hpp"
 #include "pes/modules/drivers/dustrak/drx_85xx.hpp"
+#include "chrono"
 #include "string"
 #include "string_view"
 #include "array"
+#include "vector"
 
 namespace core
 {
@@ -16,6 +19,16 @@ namespace core
 
     constexpr std::string_view rs232ConfigRedisKey = "rs232_config";
     constexpr std::string_view rs232ConfigFile = "/opt/gateway/software_storage/AES/rs232_config.json";
+
+    constexpr std::string_view rs485ConfigRedisKey = "rs485_config";
+    constexpr std::string_view rs485ConfigFile = "/opt/gateway/software_storage/AES/rs485_config.json";
+
+    constexpr std::string_view modbusTcpConfigRedisKey = "modbus_tcp_config";
+    constexpr std::string_view modbusTcpConfigFile = "/opt/gateway/software_storage/AES/modbus_tcp_config.json";
+
+    constexpr std::size_t modbusTcpInterfaces = 2;
+    constexpr std::size_t modbusTcpConnectionsPerInterface = 10;
+    constexpr std::size_t modbusTcpMaxConnections = modbusTcpInterfaces * modbusTcpConnectionsPerInterface;
 
     enum class sensorKind
     {
@@ -73,7 +86,29 @@ namespace core
         module::drivers::dustrak::drx85xx dustTrak;
     };
 
+    struct modbusRtuRuntime
+    {
+        bool enabled {false};
+        bool initialized {false};
+        module::protocols::modbus::rtuConfig config;
+        module::protocols::modbus::client client_;
+        std::chrono::steady_clock::time_point lastPoll {};
+        std::vector<module::protocols::modbus::sample> samples {};
+    };
+
+    struct modbusTcpRuntime
+    {
+        bool enabled {false};
+        bool initialized {false};
+        module::protocols::modbus::tcpConfig config;
+        module::protocols::modbus::client client_;
+        std::chrono::steady_clock::time_point lastPoll {};
+        std::vector<module::protocols::modbus::sample> samples {};
+    };
+
     extern std::array<sensorRuntime, 4> sensors;
+    extern std::array<modbusRtuRuntime, 2> modbusRtuRuntimes;
+    extern std::array<modbusTcpRuntime, modbusTcpMaxConnections> modbusTcpRuntimes;
 
 
 

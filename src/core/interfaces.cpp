@@ -2,19 +2,25 @@
 #include "pes/core/sensor_thread.hpp"
 #include "pes/core/interfaces.hpp"
 #include "pes/modules/protocols/serial/serial.hpp"
+#include "pes/modules/protocols/modbus/modbus_client.hpp"
 #include "pes/modules/drivers/dustrak/drx_85xx.hpp"
 #include "pes/utils/file/file_reader.hpp"
 #include "pes/utils/file/json_file.hpp"
 #include "spdlog/spdlog.h"
 #include "vector"
+#include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <thread>
+#include <unordered_map>
 #include "cstdlib"
 
 namespace core
 {
 
     std::array<sensorRuntime, 4> sensors;
+    std::array<modbusRtuRuntime, 2> modbusRtuRuntimes;
+    std::array<modbusTcpRuntime, modbusTcpMaxConnections> modbusTcpRuntimes;
     utils::file::jsonFile::json root_packet;
 
     struct rs232PortMap
@@ -27,6 +33,18 @@ namespace core
     constexpr std::array<rs232PortMap, 2> rs232Ports{{
         {"port_0", rs232Ch0Path, 0},
         {"port_1", rs232Ch1Path, 1},
+    }};
+
+    struct rs485PortMap
+    {
+        std::string_view key;
+        std::string_view devicePath;
+        std::size_t runtimeIndex;
+    };
+
+    constexpr std::array<rs485PortMap, 2> rs485Ports{{
+        {"port_2", rs485Ch2Path, 0},
+        {"port_3", rs485Ch3Path, 1},
     }};
 
     static module::protocols::serial::parity parse_parity(const std::string &value)
@@ -43,6 +61,87 @@ namespace core
         return value == 2
                    ? module::protocols::serial::stopBits::Two
                    : module::protocols::serial::stopBits::One;
+    }
+
+    static char parse_modbus_parity(const std::string &value)
+    {
+        if (value == "even")
+            return 'E';
+        if (value == "odd")
+            return 'O';
+        return 'N';
+    }
+
+    static module::protocols::modbus::registerType parse_modbus_register_type(const std::string &value)
+    {
+        if (value == "input_register")
+            return module::protocols::modbus::registerType::Input;
+        return module::protocols::modbus::registerType::Holding;
+    }
+
+    static module::protocols::modbus::dataType parse_modbus_data_type(const std::string &value)
+    {
+        if (value == "uint16")
+            return module::protocols::modbus::dataType::UInt16;
+        if (value == "int32")
+            return module::protocols::modbus::dataType::Int32;
+        if (value == "uint32")
+            return module::protocols::modbus::dataType::UInt32;
+        if (value == "float32")
+            return module::protocols::modbus::dataType::Float32;
+        return module::protocols::modbus::dataType::Int16;
+    }
+
+    static module::protocols::modbus::wordOrder parse_modbus_word_order(const std::string &value)
+    {
+        if (value == "little")
+            return module::protocols::modbus::wordOrder::Little;
+        return module::protocols::modbus::wordOrder::Big;
+    }
+
+    static std::chrono::milliseconds parse_milliseconds(
+        const utils::file::jsonFile::json &json,
+        const char *key,
+        int defaultValue)
+    {
+        return std::chrono::milliseconds(std::max(json.value(key, defaultValue), 1));
+    }
+
+    static std::vector<module::protocols::modbus::registerConfig> parse_modbus_registers(
+        const utils::file::jsonFile::json &registersJson)
+    {
+        std::vector<module::protocols::modbus::registerConfig> registers;
+        if (!registersJson.is_array())
+        {
+            return registers;
+        }
+
+        registers.reserve(registersJson.size());
+        for (const auto &registerJson : registersJson)
+        {
+            if (!registerJson.is_object())
+            {
+                continue;
+            }
+
+            module::protocols::modbus::registerConfig config;
+            config.name = registerJson.value("name", "");
+            config.registerType_ = parse_modbus_register_type(registerJson.value("register_type", "holding_register"));
+            config.address = registerJson.value("address", 0);
+            config.dataType_ = parse_modbus_data_type(registerJson.value("data_type", "int16"));
+            config.wordOrder_ = parse_modbus_word_order(registerJson.value("word_order", "big"));
+            config.scale = registerJson.value("scale", 1.0);
+            config.unit = registerJson.value("unit", "");
+
+            if (config.name.empty())
+            {
+                config.name = "register_" + std::to_string(config.address);
+            }
+
+            registers.push_back(config);
+        }
+
+        return registers;
     }
 
     static sensorKind parse_sensor_kind(const std::string &value)
@@ -326,6 +425,186 @@ namespace core
         return true;
     }
 
+    static bool read_rs485_config(bool startup)
+    {
+        if (startup != true)
+        {
+            std::optional<std::string> value = redis_storage.Get(rs485ConfigRedisKey);
+            if (!value || *value != "1")
+            {
+                return false;
+            }
+
+            if (!redis_storage.Set(rs485ConfigRedisKey, std::uint8_t{0}))
+            {
+                SPDLOG_ERROR("Failed to reset Redis key '{}'", rs485ConfigRedisKey);
+                return false;
+            }
+        }
+
+        std::optional<utils::file::jsonFile::json> json_file = utils::file::jsonFile::load(rs485ConfigFile);
+        if (!json_file.has_value())
+        {
+            SPDLOG_WARN("File does not exists or empty {}", rs485ConfigFile);
+            return false;
+        }
+
+        const utils::file::jsonFile::json &packet = *json_file;
+        if (!packet.contains("rs485") || !packet["rs485"].is_object())
+        {
+            SPDLOG_WARN("Missing rs485 config object");
+            return false;
+        }
+
+        const utils::file::jsonFile::json rs485_packet = packet["rs485"];
+        for (const rs485PortMap &portMap : rs485Ports)
+        {
+            modbusRtuRuntime &runtime = modbusRtuRuntimes[portMap.runtimeIndex];
+
+            if (!rs485_packet.contains(portMap.key) || !rs485_packet[portMap.key].is_object())
+            {
+                runtime.enabled = false;
+                continue;
+            }
+
+            const utils::file::jsonFile::json portJson = rs485_packet[portMap.key];
+            const utils::file::jsonFile::json serialJson = portJson.value("serial", utils::file::jsonFile::json::object());
+            const utils::file::jsonFile::json modbusJson = portJson.value("modbus_rtu", utils::file::jsonFile::json::object());
+
+            runtime.enabled = portJson.value("enabled", false);
+            runtime.initialized = false;
+
+            auto &config = runtime.config;
+            config.name = std::string(portMap.key);
+            config.devicePath = std::string(portMap.devicePath);
+            config.baudRate = serialJson.value("baud_rate", 9600);
+            config.dataBits = serialJson.value("data_bits", 8);
+            config.parity = parse_modbus_parity(serialJson.value("parity", "none"));
+            config.stopBits = serialJson.value("stop_bits", 1);
+            config.slaveAddress = modbusJson.value("slave_address", 1);
+            config.pollInterval = parse_milliseconds(modbusJson, "poll_interval_ms", 1000);
+            config.responseTimeout = parse_milliseconds(modbusJson, "response_timeout_ms", 1000);
+            config.registers = parse_modbus_registers(modbusJson.value("registers", utils::file::jsonFile::json::array()));
+
+            SPDLOG_INFO(
+                "Loaded RS485 Modbus RTU config port={} enabled={} path={} slave={} baud={} data_bits={} stop_bits={} registers={}",
+                portMap.key,
+                runtime.enabled,
+                config.devicePath,
+                config.slaveAddress,
+                config.baudRate,
+                config.dataBits,
+                config.stopBits,
+                config.registers.size());
+        }
+
+        return true;
+    }
+
+    static bool read_modbus_tcp_config(bool startup)
+    {
+        if (startup != true)
+        {
+            std::optional<std::string> value = redis_storage.Get(modbusTcpConfigRedisKey);
+            if (!value || *value != "1")
+            {
+                return false;
+            }
+
+            if (!redis_storage.Set(modbusTcpConfigRedisKey, std::uint8_t{0}))
+            {
+                SPDLOG_ERROR("Failed to reset Redis key '{}'", modbusTcpConfigRedisKey);
+                return false;
+            }
+        }
+
+        std::optional<utils::file::jsonFile::json> json_file = utils::file::jsonFile::load(modbusTcpConfigFile);
+        if (!json_file.has_value())
+        {
+            SPDLOG_WARN("File does not exists or empty {}", modbusTcpConfigFile);
+            return false;
+        }
+
+        const utils::file::jsonFile::json &packet = *json_file;
+        if (!packet.contains("connections") || !packet["connections"].is_array())
+        {
+            SPDLOG_WARN("Missing Modbus TCP connections array");
+            return false;
+        }
+
+        for (modbusTcpRuntime &runtime : modbusTcpRuntimes)
+        {
+            runtime.enabled = false;
+            runtime.initialized = false;
+        }
+
+        const int configuredMaxConnections = packet.value("max_connections", static_cast<int>(modbusTcpConnectionsPerInterface));
+        const std::size_t perInterfaceLimit = static_cast<std::size_t>(
+            std::clamp(configuredMaxConnections, 1, static_cast<int>(modbusTcpConnectionsPerInterface)));
+
+        std::unordered_map<std::string, std::size_t> enabledByInterface;
+        std::size_t slot = 0;
+
+        for (const auto &connectionJson : packet["connections"])
+        {
+            if (!connectionJson.is_object())
+            {
+                continue;
+            }
+
+            if (slot >= modbusTcpRuntimes.size())
+            {
+                SPDLOG_WARN("Ignoring Modbus TCP connection beyond runtime capacity {}", modbusTcpRuntimes.size());
+                break;
+            }
+
+            const bool enabled = connectionJson.value("enabled", false);
+            const std::string interface = connectionJson.value("interface", "");
+            if (enabled && enabledByInterface[interface] >= perInterfaceLimit)
+            {
+                SPDLOG_WARN(
+                    "Ignoring enabled Modbus TCP connection id={} interface={} because interface limit {} is reached",
+                    connectionJson.value("id", ""),
+                    interface,
+                    perInterfaceLimit);
+                continue;
+            }
+
+            modbusTcpRuntime &runtime = modbusTcpRuntimes[slot++];
+            runtime.enabled = enabled;
+            runtime.initialized = false;
+
+            auto &config = runtime.config;
+            config.id = connectionJson.value("id", "");
+            config.name = connectionJson.value("name", config.id);
+            config.interface = interface;
+            config.ip = connectionJson.value("ip", "");
+            config.port = connectionJson.value("port", 502);
+            config.unitId = connectionJson.value("unit_id", 1);
+            config.pollInterval = parse_milliseconds(connectionJson, "poll_interval_ms", 1000);
+            config.responseTimeout = parse_milliseconds(connectionJson, "response_timeout_ms", 1000);
+            config.registers = parse_modbus_registers(connectionJson.value("registers", utils::file::jsonFile::json::array()));
+
+            if (runtime.enabled)
+            {
+                ++enabledByInterface[config.interface];
+            }
+
+            SPDLOG_INFO(
+                "Loaded Modbus TCP config slot={} id={} enabled={} interface={} endpoint={}:{} unit={} registers={}",
+                slot - 1,
+                config.id,
+                runtime.enabled,
+                config.interface,
+                config.ip,
+                config.port,
+                config.unitId,
+                config.registers.size());
+        }
+
+        return true;
+    }
+
     static void rs232_init()
     {
         for (sensorRuntime &runtime : sensors)
@@ -395,6 +674,61 @@ namespace core
                 SPDLOG_WARN("Unsupported sensor selected for slot {}", config.name);
                 break;
             }
+            }
+        }
+    }
+
+    static void modbus_rtu_init()
+    {
+        const auto now = std::chrono::steady_clock::now();
+
+        for (modbusRtuRuntime &runtime : modbusRtuRuntimes)
+        {
+            runtime.client_.disconnect();
+            runtime.samples.clear();
+            runtime.initialized = false;
+
+            if (!runtime.enabled)
+            {
+                SPDLOG_INFO("Skipping disabled Modbus RTU slot {}", runtime.config.name);
+                continue;
+            }
+
+            runtime.initialized = runtime.client_.connect_rtu(runtime.config);
+            runtime.lastPoll = now - runtime.config.pollInterval;
+
+            if (!runtime.initialized)
+            {
+                SPDLOG_ERROR("Failed to initialize Modbus RTU slot={} path={}", runtime.config.name, runtime.config.devicePath);
+            }
+        }
+    }
+
+    static void modbus_tcp_init()
+    {
+        const auto now = std::chrono::steady_clock::now();
+
+        for (modbusTcpRuntime &runtime : modbusTcpRuntimes)
+        {
+            runtime.client_.disconnect();
+            runtime.samples.clear();
+            runtime.initialized = false;
+
+            if (!runtime.enabled)
+            {
+                continue;
+            }
+
+            runtime.initialized = runtime.client_.connect_tcp(runtime.config);
+            runtime.lastPoll = now - runtime.config.pollInterval;
+
+            if (!runtime.initialized)
+            {
+                SPDLOG_ERROR(
+                    "Failed to initialize Modbus TCP slot={} endpoint={}:{}",
+                    runtime.config.id,
+                    runtime.config.ip,
+                    runtime.config.port);
             }
         }
     }
@@ -561,11 +895,94 @@ namespace core
         }
     }
 
+    static bool poll_due(
+        const std::chrono::steady_clock::time_point lastPoll,
+        const std::chrono::milliseconds pollInterval,
+        const std::chrono::steady_clock::time_point now)
+    {
+        return lastPoll.time_since_epoch().count() == 0 || now - lastPoll >= pollInterval;
+    }
+
+    static void run_modbus_rtu_loop(const std::chrono::steady_clock::time_point now)
+    {
+        for (modbusRtuRuntime &runtime : modbusRtuRuntimes)
+        {
+            if (!runtime.enabled || !poll_due(runtime.lastPoll, runtime.config.pollInterval, now))
+            {
+                continue;
+            }
+
+            runtime.lastPoll = now;
+
+            if (!runtime.initialized)
+            {
+                runtime.initialized = runtime.client_.connect_rtu(runtime.config);
+                continue;
+            }
+
+            if (!runtime.client_.poll(runtime.samples))
+            {
+                SPDLOG_WARN("Modbus RTU poll had read failures slot={}", runtime.config.name);
+            }
+
+            for (const auto &sample : runtime.samples)
+            {
+                SPDLOG_INFO("Modbus RTU sample slot={} name={} value={} unit={}", runtime.config.name, sample.name, sample.value, sample.unit);
+            }
+        }
+    }
+
+    static void run_modbus_tcp_loop(const std::chrono::steady_clock::time_point now)
+    {
+        for (modbusTcpRuntime &runtime : modbusTcpRuntimes)
+        {
+            if (!runtime.enabled || !poll_due(runtime.lastPoll, runtime.config.pollInterval, now))
+            {
+                continue;
+            }
+
+            runtime.lastPoll = now;
+
+            if (!runtime.initialized)
+            {
+                runtime.initialized = runtime.client_.connect_tcp(runtime.config);
+                continue;
+            }
+
+            if (!runtime.client_.poll(runtime.samples))
+            {
+                SPDLOG_WARN("Modbus TCP poll had read failures slot={} endpoint={}:{}", runtime.config.id, runtime.config.ip, runtime.config.port);
+            }
+
+            for (const auto &sample : runtime.samples)
+            {
+                SPDLOG_INFO("Modbus TCP sample slot={} name={} value={} unit={}", runtime.config.id, sample.name, sample.value, sample.unit);
+            }
+        }
+    }
+
+    static void run_modbus_loop()
+    {
+        const auto now = std::chrono::steady_clock::now();
+        run_modbus_rtu_loop(now);
+        run_modbus_tcp_loop(now);
+    }
+
     void interfaces_startup()
     {
         if (read_rs232_config(true))
         {
             rs232_init();
+        }
+
+        if (read_rs485_config(true))
+        {
+            modbus_rtu_init();
+        }
+
+        if (read_modbus_tcp_config(true))
+        {
+            modbus_tcp_init();
         }
     }
 
@@ -576,7 +993,18 @@ namespace core
             rs232_init();
         }
 
+        if (read_rs485_config(false))
+        {
+            modbus_rtu_init();
+        }
+
+        if (read_modbus_tcp_config(false))
+        {
+            modbus_tcp_init();
+        }
+
         run_sensor_loop();
+        run_modbus_loop();
     }
 
 }
