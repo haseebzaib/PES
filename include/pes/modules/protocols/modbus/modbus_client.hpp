@@ -78,6 +78,13 @@ namespace module::protocols::modbus
         registerConfig source {};
     };
 
+    struct readError
+    {
+        std::string name {};
+        std::string message {};
+        registerConfig source {};
+    };
+
     class client
     {
         public:
@@ -93,6 +100,7 @@ namespace module::protocols::modbus
         bool is_connected() const;
 
         bool poll(std::vector<sample>& outSamples);
+        [[nodiscard]] const std::vector<readError>& last_errors() const noexcept;
 
         private:
         bool connect_common(int slaveAddress, std::chrono::milliseconds responseTimeout);
@@ -100,6 +108,7 @@ namespace module::protocols::modbus
 
         modbus_t* context_ {nullptr};
         std::vector<registerConfig> registers_ {};
+        std::vector<readError> lastErrors_ {};
         std::string endpoint_ {};
     };
 

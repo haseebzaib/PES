@@ -13,6 +13,7 @@
 #include <chrono>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include "cstdlib"
 
 namespace core
@@ -46,6 +47,300 @@ namespace core
         {"port_2", rs485Ch2Path, 0},
         {"port_3", rs485Ch3Path, 1},
     }};
+
+    static std::int64_t unix_timestamp_ms()
+    {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::system_clock::now().time_since_epoch())
+            .count();
+    }
+
+    static std::string json_dump(const utils::file::jsonFile::json &value)
+    {
+        return value.dump();
+    }
+
+    static std::string modbus_tcp_device_id(const modbusTcpRuntime &runtime, const std::size_t slot)
+    {
+        return runtime.config.id.empty() ? "slot_" + std::to_string(slot) : runtime.config.id;
+    }
+
+    static void store_sensor_samples(const std::vector<storage::SensorSampleRecord> &samples)
+    {
+        if (!samples.empty() && !sensor_storage.StoreSamples(samples))
+        {
+            SPDLOG_WARN("Failed to store {} sensor sample records", samples.size());
+        }
+    }
+
+    static void store_sensor_event(const storage::SensorEventRecord &event)
+    {
+        if (!sensor_storage.StoreEvent(event))
+        {
+            SPDLOG_WARN("Failed to store sensor event source={} device={} type={}", event.source, event.device_id, event.event_type);
+        }
+    }
+
+    static void publish_sensor_state(const storage::SensorDeviceState &state)
+    {
+        static_cast<void>(sensor_live_publisher.PublishDeviceState(state));
+    }
+
+    static std::string modbus_register_details_json(const module::protocols::modbus::registerConfig &config)
+    {
+        utils::file::jsonFile::json details;
+        details["address"] = config.address;
+        details["scale"] = config.scale;
+        details["unit"] = config.unit;
+        details["register_type"] = config.registerType_ == module::protocols::modbus::registerType::Input
+                                       ? "input_register"
+                                       : "holding_register";
+        return json_dump(details);
+    }
+
+    static storage::SensorEventRecord make_sensor_event(
+        const std::int64_t timestampMs,
+        std::string source,
+        std::string deviceId,
+        std::string deviceName,
+        std::string severity,
+        std::string eventType,
+        std::string message,
+        std::string detailsJson = {})
+    {
+        return {
+            .timestamp_ms = timestampMs,
+            .source = std::move(source),
+            .device_id = std::move(deviceId),
+            .device_name = std::move(deviceName),
+            .severity = std::move(severity),
+            .event_type = std::move(eventType),
+            .message = std::move(message),
+            .details_json = std::move(detailsJson),
+        };
+    }
+
+    static void publish_device_index()
+    {
+        std::vector<storage::SensorLivePublisher::DeviceIndexEntry> devices;
+
+        for (const sensorRuntime &runtime : sensors)
+        {
+            if (!runtime.config.enabled)
+            {
+                continue;
+            }
+
+            if (runtime.config.transportKind_ == transportKind::RS232)
+            {
+                devices.push_back({
+                    .source = "rs232",
+                    .device_id = runtime.config.name,
+                    .device_name = runtime.config.name,
+                    .state_key = storage::SensorLivePublisher::StateKey("rs232", runtime.config.name),
+                });
+            }
+        }
+
+        for (const modbusRtuRuntime &runtime : modbusRtuRuntimes)
+        {
+            if (!runtime.enabled)
+            {
+                continue;
+            }
+
+            devices.push_back({
+                .source = "rs485",
+                .device_id = runtime.config.name,
+                .device_name = runtime.config.name,
+                .state_key = storage::SensorLivePublisher::StateKey("rs485", runtime.config.name),
+            });
+        }
+
+        for (std::size_t index = 0; index < modbusTcpRuntimes.size(); ++index)
+        {
+            const modbusTcpRuntime &runtime = modbusTcpRuntimes[index];
+            if (!runtime.enabled)
+            {
+                continue;
+            }
+
+            const std::string deviceId = modbus_tcp_device_id(runtime, index);
+            devices.push_back({
+                .source = "modbus_tcp",
+                .device_id = deviceId,
+                .device_name = runtime.config.name,
+                .state_key = storage::SensorLivePublisher::StateKey("modbus_tcp", deviceId),
+            });
+        }
+
+        static_cast<void>(sensor_live_publisher.PublishDeviceIndex(unix_timestamp_ms(), devices));
+    }
+
+    static std::vector<storage::SensorSampleRecord> build_modbus_sample_records(
+        const std::int64_t timestampMs,
+        const std::string &source,
+        const std::string &deviceId,
+        const std::string &deviceName,
+        const std::vector<module::protocols::modbus::sample> &samples)
+    {
+        std::vector<storage::SensorSampleRecord> records;
+        records.reserve(samples.size());
+
+        for (const auto &sample : samples)
+        {
+            records.push_back({
+                .timestamp_ms = timestampMs,
+                .source = source,
+                .device_id = deviceId,
+                .device_name = deviceName,
+                .metric = sample.name,
+                .value = sample.value,
+                .unit = sample.unit,
+                .quality = "good",
+                .details_json = modbus_register_details_json(sample.source),
+            });
+        }
+
+        return records;
+    }
+
+    static std::vector<storage::SensorMetricValue> build_modbus_metrics(
+        const std::int64_t timestampMs,
+        const std::vector<module::protocols::modbus::sample> &samples)
+    {
+        std::vector<storage::SensorMetricValue> metrics;
+        metrics.reserve(samples.size());
+
+        for (const auto &sample : samples)
+        {
+            metrics.push_back({
+                .name = sample.name,
+                .value = sample.value,
+                .unit = sample.unit,
+                .quality = "good",
+                .timestamp_ms = timestampMs,
+            });
+        }
+
+        return metrics;
+    }
+
+    static std::vector<storage::SensorSampleRecord> build_dustrak_sample_records(
+        const std::int64_t timestampMs,
+        const sensorRuntime &runtime)
+    {
+        constexpr std::array<std::string_view, 5> channels{{
+            "pm1",
+            "pm25",
+            "pm4",
+            "pm10",
+            "total",
+        }};
+
+        const auto &state = runtime.dustTrak.state();
+        std::vector<storage::SensorSampleRecord> records;
+        records.reserve(state.latestMeasurement.channelValuesMgPerM3.size());
+
+        for (std::size_t index = 0; index < state.latestMeasurement.channelValuesMgPerM3.size(); ++index)
+        {
+            const std::string metric = index < channels.size()
+                                           ? std::string(channels[index])
+                                           : "channel_" + std::to_string(index);
+            utils::file::jsonFile::json details;
+            details["elapsed_seconds"] = state.latestMeasurement.elapsedSeconds;
+            details["channel_index"] = index;
+            details["model"] = state.identity.modelText;
+            details["serial_number"] = state.identity.serialNumber;
+
+            records.push_back({
+                .timestamp_ms = timestampMs,
+                .source = "rs232",
+                .device_id = runtime.config.name,
+                .device_name = runtime.config.name,
+                .metric = metric,
+                .value = state.latestMeasurement.channelValuesMgPerM3[index],
+                .unit = "mg/m3",
+                .quality = "good",
+                .details_json = json_dump(details),
+            });
+        }
+
+        return records;
+    }
+
+    static std::vector<storage::SensorMetricValue> build_dustrak_metrics(
+        const std::int64_t timestampMs,
+        const sensorRuntime &runtime)
+    {
+        constexpr std::array<std::string_view, 5> channels{{
+            "pm1",
+            "pm25",
+            "pm4",
+            "pm10",
+            "total",
+        }};
+
+        const auto &state = runtime.dustTrak.state();
+        std::vector<storage::SensorMetricValue> metrics;
+        metrics.reserve(state.latestMeasurement.channelValuesMgPerM3.size());
+
+        for (std::size_t index = 0; index < state.latestMeasurement.channelValuesMgPerM3.size(); ++index)
+        {
+            metrics.push_back({
+                .name = index < channels.size() ? std::string(channels[index]) : "channel_" + std::to_string(index),
+                .value = state.latestMeasurement.channelValuesMgPerM3[index],
+                .unit = "mg/m3",
+                .quality = "good",
+                .timestamp_ms = timestampMs,
+            });
+        }
+
+        return metrics;
+    }
+
+    static std::optional<storage::SensorEventInfo> dustrak_fault_event(
+        const std::int64_t timestampMs,
+        const sensorRuntime &runtime)
+    {
+        const auto &faultFlags = runtime.dustTrak.state().faultMessageFlags;
+        if (std::ranges::none_of(faultFlags, [](const int flag) { return flag != 0; }))
+        {
+            return std::nullopt;
+        }
+
+        utils::file::jsonFile::json details;
+        details["fault_flags"] = faultFlags;
+
+        return storage::SensorEventInfo{
+            .timestamp_ms = timestampMs,
+            .severity = "warning",
+            .event_type = "fault_flags",
+            .message = "DustTrak reported fault flags",
+            .details_json = json_dump(details),
+        };
+    }
+
+    static void publish_error_state(
+        const std::int64_t timestampMs,
+        const std::string &source,
+        const std::string &deviceId,
+        const std::string &deviceName,
+        const std::string &transportType,
+        const std::string &endpoint,
+        const storage::SensorEventInfo &event)
+    {
+        storage::SensorDeviceState state;
+        state.timestamp_ms = timestampMs;
+        state.source = source;
+        state.device_id = deviceId;
+        state.device_name = deviceName;
+        state.status = "error";
+        state.transport_type = transportType;
+        state.endpoint = endpoint;
+        state.error = event;
+        publish_sensor_state(state);
+    }
 
     static module::protocols::serial::parity parse_parity(const std::string &value)
     {
@@ -627,6 +922,23 @@ namespace core
                 if (!transportReady)
                 {
                     SPDLOG_ERROR("Failed to initialize RS232 transport slot={} path={}", config.name, config.serial.devicePath_);
+                    const std::int64_t timestampMs = unix_timestamp_ms();
+                    storage::SensorEventInfo event{
+                        .timestamp_ms = timestampMs,
+                        .severity = "error",
+                        .event_type = "serial_open_failed",
+                        .message = "Failed to initialize RS232 transport",
+                    };
+                    store_sensor_event(make_sensor_event(
+                        timestampMs,
+                        "rs232",
+                        config.name,
+                        config.name,
+                        event.severity,
+                        event.event_type,
+                        event.message,
+                        "{}"));
+                    publish_error_state(timestampMs, "rs232", config.name, config.name, "serial", config.serial.devicePath_, event);
                 }
                 break;
             }
@@ -700,6 +1012,23 @@ namespace core
             if (!runtime.initialized)
             {
                 SPDLOG_ERROR("Failed to initialize Modbus RTU slot={} path={}", runtime.config.name, runtime.config.devicePath);
+                const std::int64_t timestampMs = unix_timestamp_ms();
+                storage::SensorEventInfo event{
+                    .timestamp_ms = timestampMs,
+                    .severity = "error",
+                    .event_type = "connect_failed",
+                    .message = "Failed to initialize Modbus RTU connection",
+                };
+                store_sensor_event(make_sensor_event(
+                    timestampMs,
+                    "rs485",
+                    runtime.config.name,
+                    runtime.config.name,
+                    event.severity,
+                    event.event_type,
+                    event.message,
+                    "{}"));
+                publish_error_state(timestampMs, "rs485", runtime.config.name, runtime.config.name, "modbus_rtu", runtime.config.devicePath, event);
             }
         }
     }
@@ -708,8 +1037,9 @@ namespace core
     {
         const auto now = std::chrono::steady_clock::now();
 
-        for (modbusTcpRuntime &runtime : modbusTcpRuntimes)
+        for (std::size_t index = 0; index < modbusTcpRuntimes.size(); ++index)
         {
+            modbusTcpRuntime &runtime = modbusTcpRuntimes[index];
             runtime.client_.disconnect();
             runtime.samples.clear();
             runtime.initialized = false;
@@ -729,6 +1059,25 @@ namespace core
                     runtime.config.id,
                     runtime.config.ip,
                     runtime.config.port);
+                const std::int64_t timestampMs = unix_timestamp_ms();
+                const std::string deviceId = modbus_tcp_device_id(runtime, index);
+                const std::string endpoint = runtime.config.ip + ":" + std::to_string(runtime.config.port);
+                storage::SensorEventInfo event{
+                    .timestamp_ms = timestampMs,
+                    .severity = "error",
+                    .event_type = "connect_failed",
+                    .message = "Failed to initialize Modbus TCP connection",
+                };
+                store_sensor_event(make_sensor_event(
+                    timestampMs,
+                    "modbus_tcp",
+                    deviceId,
+                    runtime.config.name,
+                    event.severity,
+                    event.event_type,
+                    event.message,
+                    "{}"));
+                publish_error_state(timestampMs, "modbus_tcp", deviceId, runtime.config.name, "modbus_tcp", endpoint, event);
             }
         }
     }
@@ -876,6 +1225,36 @@ namespace core
             case sensorKind::dustrak:
             {
                 runtime.dustTrak.loop(sensorPacket);
+                const std::int64_t timestampMs = unix_timestamp_ms();
+                const auto sampleRecords = build_dustrak_sample_records(timestampMs, runtime);
+                store_sensor_samples(sampleRecords);
+
+                auto faultEvent = dustrak_fault_event(timestampMs, runtime);
+                if (faultEvent.has_value())
+                {
+                    store_sensor_event(make_sensor_event(
+                        timestampMs,
+                        "rs232",
+                        runtime.config.name,
+                        runtime.config.name,
+                        faultEvent->severity,
+                        faultEvent->event_type,
+                        faultEvent->message,
+                        faultEvent->details_json));
+                }
+
+                storage::SensorDeviceState state;
+                state.timestamp_ms = timestampMs;
+                state.source = "rs232";
+                state.device_id = runtime.config.name;
+                state.device_name = runtime.config.name;
+                state.status = faultEvent.has_value() ? "warning" : "ok";
+                state.transport_type = "serial";
+                state.endpoint = runtime.config.serial.devicePath_;
+                state.metrics = build_dustrak_metrics(timestampMs, runtime);
+                state.error = faultEvent;
+                state.raw_json = sensorPacket;
+                publish_sensor_state(state);
                 handle_dustrak_runtime_config(runtime);
                 break;
             }
@@ -917,25 +1296,98 @@ namespace core
             if (!runtime.initialized)
             {
                 runtime.initialized = runtime.client_.connect_rtu(runtime.config);
+                if (!runtime.initialized)
+                {
+                    const std::int64_t timestampMs = unix_timestamp_ms();
+                    storage::SensorEventInfo event{
+                        .timestamp_ms = timestampMs,
+                        .severity = "error",
+                        .event_type = "connect_failed",
+                        .message = "Failed to reconnect Modbus RTU connection",
+                    };
+                    store_sensor_event(make_sensor_event(
+                        timestampMs,
+                        "rs485",
+                        runtime.config.name,
+                        runtime.config.name,
+                        event.severity,
+                        event.event_type,
+                        event.message,
+                        "{}"));
+                    publish_error_state(timestampMs, "rs485", runtime.config.name, runtime.config.name, "modbus_rtu", runtime.config.devicePath, event);
+                }
                 continue;
             }
 
-            if (!runtime.client_.poll(runtime.samples))
+            const std::int64_t timestampMs = unix_timestamp_ms();
+            const bool pollOk = runtime.client_.poll(runtime.samples);
+            if (!pollOk)
             {
                 SPDLOG_WARN("Modbus RTU poll had read failures slot={}", runtime.config.name);
+                const auto &errors = runtime.client_.last_errors();
+                if (errors.empty())
+                {
+                    storage::SensorEventInfo event{
+                        .timestamp_ms = timestampMs,
+                        .severity = "warning",
+                        .event_type = "poll_failed",
+                        .message = "Modbus RTU poll had read failures",
+                    };
+                    store_sensor_event(make_sensor_event(timestampMs, "rs485", runtime.config.name, runtime.config.name, event.severity, event.event_type, event.message, "{}"));
+                }
+                else
+                {
+                    for (const auto &error : errors)
+                    {
+                        store_sensor_event(make_sensor_event(
+                            timestampMs,
+                            "rs485",
+                            runtime.config.name,
+                            runtime.config.name,
+                            "warning",
+                            "register_read_failed",
+                            error.message,
+                            modbus_register_details_json(error.source)));
+                    }
+                }
             }
 
             for (const auto &sample : runtime.samples)
             {
                 SPDLOG_INFO("Modbus RTU sample slot={} name={} value={} unit={}", runtime.config.name, sample.name, sample.value, sample.unit);
             }
+
+            store_sensor_samples(build_modbus_sample_records(timestampMs, "rs485", runtime.config.name, runtime.config.name, runtime.samples));
+
+            storage::SensorDeviceState state;
+            state.timestamp_ms = timestampMs;
+            state.source = "rs485";
+            state.device_id = runtime.config.name;
+            state.device_name = runtime.config.name;
+            state.status = pollOk ? "ok" : "error";
+            state.transport_type = "modbus_rtu";
+            state.endpoint = runtime.config.devicePath;
+            state.slave_address = runtime.config.slaveAddress;
+            state.metrics = build_modbus_metrics(timestampMs, runtime.samples);
+            if (!pollOk)
+            {
+                state.error = storage::SensorEventInfo{
+                    .timestamp_ms = timestampMs,
+                    .severity = "warning",
+                    .event_type = "poll_failed",
+                    .message = "Modbus RTU poll had read failures",
+                    .details_json = "{}",
+                };
+            }
+            publish_sensor_state(state);
         }
     }
 
     static void run_modbus_tcp_loop(const std::chrono::steady_clock::time_point now)
     {
-        for (modbusTcpRuntime &runtime : modbusTcpRuntimes)
+        for (std::size_t index = 0; index < modbusTcpRuntimes.size(); ++index)
         {
+            modbusTcpRuntime &runtime = modbusTcpRuntimes[index];
             if (!runtime.enabled || !poll_due(runtime.lastPoll, runtime.config.pollInterval, now))
             {
                 continue;
@@ -946,18 +1398,87 @@ namespace core
             if (!runtime.initialized)
             {
                 runtime.initialized = runtime.client_.connect_tcp(runtime.config);
+                if (!runtime.initialized)
+                {
+                    const std::int64_t timestampMs = unix_timestamp_ms();
+                    const std::string deviceId = modbus_tcp_device_id(runtime, index);
+                    const std::string endpoint = runtime.config.ip + ":" + std::to_string(runtime.config.port);
+                    storage::SensorEventInfo event{
+                        .timestamp_ms = timestampMs,
+                        .severity = "error",
+                        .event_type = "connect_failed",
+                        .message = "Failed to reconnect Modbus TCP connection",
+                    };
+                    store_sensor_event(make_sensor_event(timestampMs, "modbus_tcp", deviceId, runtime.config.name, event.severity, event.event_type, event.message, "{}"));
+                    publish_error_state(timestampMs, "modbus_tcp", deviceId, runtime.config.name, "modbus_tcp", endpoint, event);
+                }
                 continue;
             }
 
-            if (!runtime.client_.poll(runtime.samples))
+            const std::int64_t timestampMs = unix_timestamp_ms();
+            const std::string deviceId = modbus_tcp_device_id(runtime, index);
+            const bool pollOk = runtime.client_.poll(runtime.samples);
+            if (!pollOk)
             {
                 SPDLOG_WARN("Modbus TCP poll had read failures slot={} endpoint={}:{}", runtime.config.id, runtime.config.ip, runtime.config.port);
+                const auto &errors = runtime.client_.last_errors();
+                if (errors.empty())
+                {
+                    storage::SensorEventInfo event{
+                        .timestamp_ms = timestampMs,
+                        .severity = "warning",
+                        .event_type = "poll_failed",
+                        .message = "Modbus TCP poll had read failures",
+                    };
+                    store_sensor_event(make_sensor_event(timestampMs, "modbus_tcp", deviceId, runtime.config.name, event.severity, event.event_type, event.message, "{}"));
+                }
+                else
+                {
+                    for (const auto &error : errors)
+                    {
+                        store_sensor_event(make_sensor_event(
+                            timestampMs,
+                            "modbus_tcp",
+                            deviceId,
+                            runtime.config.name,
+                            "warning",
+                            "register_read_failed",
+                            error.message,
+                            modbus_register_details_json(error.source)));
+                    }
+                }
             }
 
             for (const auto &sample : runtime.samples)
             {
                 SPDLOG_INFO("Modbus TCP sample slot={} name={} value={} unit={}", runtime.config.id, sample.name, sample.value, sample.unit);
             }
+
+            store_sensor_samples(build_modbus_sample_records(timestampMs, "modbus_tcp", deviceId, runtime.config.name, runtime.samples));
+
+            storage::SensorDeviceState state;
+            state.timestamp_ms = timestampMs;
+            state.source = "modbus_tcp";
+            state.device_id = deviceId;
+            state.device_name = runtime.config.name;
+            state.status = pollOk ? "ok" : "error";
+            state.transport_type = "modbus_tcp";
+            state.endpoint = runtime.config.ip;
+            state.network_interface = runtime.config.interface;
+            state.port = runtime.config.port;
+            state.unit_id = runtime.config.unitId;
+            state.metrics = build_modbus_metrics(timestampMs, runtime.samples);
+            if (!pollOk)
+            {
+                state.error = storage::SensorEventInfo{
+                    .timestamp_ms = timestampMs,
+                    .severity = "warning",
+                    .event_type = "poll_failed",
+                    .message = "Modbus TCP poll had read failures",
+                    .details_json = "{}",
+                };
+            }
+            publish_sensor_state(state);
         }
     }
 
@@ -984,6 +1505,8 @@ namespace core
         {
             modbus_tcp_init();
         }
+
+        publish_device_index();
     }
 
     void interfaces_loop()
@@ -1005,6 +1528,7 @@ namespace core
 
         run_sensor_loop();
         run_modbus_loop();
+        publish_device_index();
     }
 
 }

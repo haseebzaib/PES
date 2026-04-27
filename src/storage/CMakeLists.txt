@@ -3,6 +3,8 @@ find_package(SQLite3 REQUIRED)
 add_library(pes_storage
     ping_storage.cpp
     redis_storage.cpp
+    sensor_live_publisher.cpp
+    sensor_storage.cpp
     sqlite_storage.cpp
 )
 

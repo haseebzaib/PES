@@ -230,6 +230,11 @@ void SqliteStorage::Close()
 
 bool SqliteStorage::ConfigurePragmas()
 {
+    if (!ExecuteUnlocked("PRAGMA auto_vacuum=INCREMENTAL;"))
+    {
+        return false;
+    }
+
     if (!ExecuteUnlocked("PRAGMA journal_mode=WAL;"))
     {
         return false;
@@ -399,6 +404,7 @@ bool SqliteStorage::RunRetentionPolicyUnlocked()
                 break;
             }
 
+            static_cast<void>(ExecuteUnlocked("PRAGMA incremental_vacuum;"));
             static_cast<void>(ExecuteUnlocked("PRAGMA wal_checkpoint(TRUNCATE);"));
             SPDLOG_INFO("SQLite retention removed {} processed rows from {}", removed, target.table_name);
         }
@@ -414,6 +420,7 @@ bool SqliteStorage::RunRetentionPolicyUnlocked()
                 break;
             }
 
+            static_cast<void>(ExecuteUnlocked("PRAGMA incremental_vacuum;"));
             static_cast<void>(ExecuteUnlocked("PRAGMA wal_checkpoint(TRUNCATE);"));
             SPDLOG_WARN("SQLite retention removed {} oldest rows from {}", removed, target.table_name);
         }

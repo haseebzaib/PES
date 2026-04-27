@@ -15,6 +15,14 @@ namespace core
     .port = 6379,
     .database = 0,
   });
+  storage::SensorStorage sensor_storage({
+    .db_path = "/opt/gateway/software_storage/PES/pes.db",
+    .max_database_bytes = 5ULL * 1024ULL * 1024ULL * 1024ULL,
+  });
+  storage::SensorLivePublisher sensor_live_publisher(redis_storage, {
+    .device_index_key = "pes:devices:index",
+    .sample_buffer_size = 100,
+  });
 
   void run_application()
   {
@@ -27,6 +35,15 @@ namespace core
     else
     {
       SPDLOG_INFO("Redis storage initialized");
+    }
+
+    if (!sensor_storage.Initialize())
+    {
+      SPDLOG_ERROR("Sensor storage initialization failed");
+    }
+    else
+    {
+      SPDLOG_INFO("Sensor storage initialized");
     }
 
     std::jthread NetworkThread(network_thread);

@@ -188,10 +188,15 @@ namespace module::protocols::modbus
     bool client::poll(std::vector<sample>& outSamples)
     {
         outSamples.clear();
+        lastErrors_.clear();
 
         if (!context_)
         {
             SPDLOG_ERROR("Modbus poll failed: no active context");
+            lastErrors_.push_back({
+                .name = "connection",
+                .message = "Modbus poll failed: no active context",
+            });
             return false;
         }
 
@@ -210,6 +215,11 @@ namespace module::protocols::modbus
         }
 
         return allReadsOk;
+    }
+
+    const std::vector<readError>& client::last_errors() const noexcept
+    {
+        return lastErrors_;
     }
 
     bool client::read_register(const registerConfig& config, sample& outSample)
@@ -231,6 +241,7 @@ namespace module::protocols::modbus
 
         if (readCount != count)
         {
+            const std::string errorMessage = modbus_strerror(errno);
             SPDLOG_WARN(
                 "Modbus register read failed endpoint={} name={} address={} normalized={} count={} error={}",
                 endpoint_,
@@ -238,7 +249,12 @@ namespace module::protocols::modbus
                 config.address,
                 address,
                 count,
-                modbus_strerror(errno));
+                errorMessage);
+            lastErrors_.push_back({
+                .name = config.name,
+                .message = errorMessage,
+                .source = config,
+            });
             return false;
         }
 
