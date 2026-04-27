@@ -73,6 +73,8 @@ namespace core
     {
         bool enabled;
         std::string name;
+        std::string deviceName;
+        std::string deviceType;
         sensorKind sensorKind_;
         transportKind transportKind_;
         module::protocols::serial::serialConfig serial;

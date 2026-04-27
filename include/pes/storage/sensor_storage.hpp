@@ -34,6 +34,7 @@ struct SensorSampleRecord
     std::string source {};
     std::string device_id {};
     std::string device_name {};
+    std::string device_type {};
     std::string metric {};
     double value {0.0};
     std::string unit {};
@@ -47,6 +48,7 @@ struct SensorEventRecord
     std::string source {};
     std::string device_id {};
     std::string device_name {};
+    std::string device_type {};
     std::string severity {"warning"};
     std::string event_type {};
     std::string message {};
@@ -59,6 +61,7 @@ struct SensorDeviceState
     std::string source {};
     std::string device_id {};
     std::string device_name {};
+    std::string device_type {};
     std::string status {"ok"};
 
     std::string transport_type {};

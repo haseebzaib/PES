@@ -32,7 +32,7 @@ namespace module::protocols::modbus
         Little,
     };
 
-    struct registerConfig
+    struct kregisterConfig
     {
         std::string name {};
         registerType registerType_ {registerType::Holding};

@@ -134,6 +134,7 @@ std::string SensorLivePublisher::SerializeDeviceState(const SensorDeviceState& s
     payload["source"] = state.source;
     payload["device_id"] = state.device_id;
     payload["name"] = state.device_name;
+    payload["device_type"] = state.device_type;
     payload["status"] = state.status;
 
     json transport;
@@ -207,6 +208,7 @@ std::string SensorLivePublisher::SerializeDeviceIndex(
             {"source", device.source},
             {"device_id", device.device_id},
             {"name", device.device_name},
+            {"device_type", device.device_type},
         });
     }
 

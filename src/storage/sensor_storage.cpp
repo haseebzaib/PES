@@ -12,13 +12,13 @@ namespace
 {
 constexpr const char* kInsertSampleSql =
     "INSERT INTO sensor_samples "
-    "(timestamp_ms, source, device_id, device_name, metric, value, unit, quality, details_json, processed) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0);";
+    "(timestamp_ms, source, device_id, device_name, device_type, metric, value, unit, quality, details_json, processed) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0);";
 
 constexpr const char* kInsertEventSql =
     "INSERT INTO sensor_events "
-    "(timestamp_ms, source, device_id, device_name, severity, event_type, message, details_json, processed) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0);";
+    "(timestamp_ms, source, device_id, device_name, device_type, severity, event_type, message, details_json, processed) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0);";
 
 void bind_text(sqlite3_stmt* stmt, const int index, const std::string& value)
 {
@@ -125,6 +125,7 @@ SqliteStorage::Config SensorStorage::MakeSqliteConfig(const Config& config)
             "source TEXT NOT NULL,"
             "device_id TEXT NOT NULL,"
             "device_name TEXT,"
+            "device_type TEXT,"
             "metric TEXT NOT NULL,"
             "value REAL,"
             "unit TEXT,"
@@ -142,6 +143,7 @@ SqliteStorage::Config SensorStorage::MakeSqliteConfig(const Config& config)
             "source TEXT NOT NULL,"
             "device_id TEXT NOT NULL,"
             "device_name TEXT,"
+            "device_type TEXT,"
             "severity TEXT NOT NULL,"
             "event_type TEXT NOT NULL,"
             "message TEXT NOT NULL,"
@@ -166,11 +168,12 @@ bool SensorStorage::InsertSample(const SensorSampleRecord& record)
         bind_text(stmt, 2, record.source);
         bind_text(stmt, 3, record.device_id);
         bind_text(stmt, 4, record.device_name);
-        bind_text(stmt, 5, record.metric);
-        sqlite3_bind_double(stmt, 6, record.value);
-        bind_text(stmt, 7, record.unit);
-        bind_text(stmt, 8, record.quality);
-        bind_text(stmt, 9, record.details_json);
+        bind_text(stmt, 5, record.device_type);
+        bind_text(stmt, 6, record.metric);
+        sqlite3_bind_double(stmt, 7, record.value);
+        bind_text(stmt, 8, record.unit);
+        bind_text(stmt, 9, record.quality);
+        bind_text(stmt, 10, record.details_json);
         return true;
     });
 }
@@ -182,10 +185,11 @@ bool SensorStorage::InsertEvent(const SensorEventRecord& record)
         bind_text(stmt, 2, record.source);
         bind_text(stmt, 3, record.device_id);
         bind_text(stmt, 4, record.device_name);
-        bind_text(stmt, 5, record.severity);
-        bind_text(stmt, 6, record.event_type);
-        bind_text(stmt, 7, record.message);
-        bind_text(stmt, 8, record.details_json);
+        bind_text(stmt, 5, record.device_type);
+        bind_text(stmt, 6, record.severity);
+        bind_text(stmt, 7, record.event_type);
+        bind_text(stmt, 8, record.message);
+        bind_text(stmt, 9, record.details_json);
         return true;
     });
 }
