@@ -86,6 +86,11 @@ namespace module::protocols::modbus
             const auto microseconds = static_cast<std::uint32_t>((timeout.count() % 1000) * 1000);
             modbus_set_response_timeout(context, seconds, microseconds);
         }
+
+        bool is_connection_lost_error(const int error)
+        {
+            return error == EPIPE || error == ECONNRESET || error == ECONNABORTED || error == ENOTCONN || error == EBADF;
+        }
     }
 
     client::~client()
@@ -151,11 +156,17 @@ namespace module::protocols::modbus
         context_ = nullptr;
         registers_.clear();
         endpoint_.clear();
+        connectionLost_ = false;
     }
 
     bool client::is_connected() const
     {
         return context_ != nullptr;
+    }
+
+    bool client::connection_lost() const noexcept
+    {
+        return connectionLost_;
     }
 
     bool client::connect_common(const int slaveAddress, const std::chrono::milliseconds responseTimeout)
@@ -182,6 +193,7 @@ namespace module::protocols::modbus
         }
 
         SPDLOG_INFO("Connected Modbus endpoint={} registers={}", endpoint_, registers_.size());
+        connectionLost_ = false;
         return true;
     }
 
@@ -189,6 +201,7 @@ namespace module::protocols::modbus
     {
         outSamples.clear();
         lastErrors_.clear();
+        connectionLost_ = false;
 
         if (!context_)
         {
@@ -197,6 +210,7 @@ namespace module::protocols::modbus
                 .name = "connection",
                 .message = "Modbus poll failed: no active context",
             });
+            connectionLost_ = true;
             return false;
         }
 
@@ -211,6 +225,10 @@ namespace module::protocols::modbus
             else
             {
                 allReadsOk = false;
+                if (connectionLost_)
+                {
+                    break;
+                }
             }
         }
 
@@ -241,7 +259,8 @@ namespace module::protocols::modbus
 
         if (readCount != count)
         {
-            const std::string errorMessage = modbus_strerror(errno);
+            const int error = errno;
+            const std::string errorMessage = modbus_strerror(error);
             SPDLOG_WARN(
                 "Modbus register read failed endpoint={} name={} address={} normalized={} count={} error={}",
                 endpoint_,
@@ -255,6 +274,10 @@ namespace module::protocols::modbus
                 .message = errorMessage,
                 .source = config,
             });
+            if (is_connection_lost_error(error))
+            {
+                connectionLost_ = true;
+            }
             return false;
         }
 

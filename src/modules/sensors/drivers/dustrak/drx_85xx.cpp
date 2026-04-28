@@ -12,6 +12,20 @@ namespace module::drivers::dustrak
 
     namespace
     {
+        constexpr auto init_retry_interval = std::chrono::seconds(2);
+        constexpr auto start_retry_interval = std::chrono::seconds(5);
+        constexpr auto status_poll_interval = std::chrono::seconds(5);
+        constexpr auto measurement_poll_interval = std::chrono::seconds(1);
+        constexpr auto optional_poll_interval = std::chrono::seconds(5);
+        constexpr auto timeout_cooldown = std::chrono::seconds(2);
+
+        std::int64_t unix_timestamp_ms()
+        {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                .count();
+        }
+
         std::string trim(std::string value)
         {
             auto is_space = [](unsigned char ch) { return std::isspace(ch) != 0; };
@@ -354,6 +368,14 @@ namespace module::drivers::dustrak
     {
         serialPort_ = &serialPort;
         initialized_ = false;
+        nextCommandAttempt_ = {};
+        nextInitAttempt_ = {};
+        nextStartAttempt_ = {};
+        nextStatusPoll_ = {};
+        nextMeasurementPoll_ = {};
+        nextFaultPoll_ = {};
+        nextAlarmPoll_ = {};
+        nextLogInfoPoll_ = {};
     }
 
     void drx85xx::configure(const driverConfig& config)
@@ -371,9 +393,19 @@ namespace module::drivers::dustrak
         return state_;
     }
 
+    const drx85xx::communicationHealth& drx85xx::health() const
+    {
+        return health_;
+    }
+
     const std::string& drx85xx::json_packet() const
     {
         return jsonPacket_;
+    }
+
+    std::int64_t drx85xx::last_measurement_timestamp_ms() const
+    {
+        return lastMeasurementTimestampMs_;
     }
 
     void drx85xx::loop(std::string& json_packet)
@@ -384,12 +416,27 @@ namespace module::drivers::dustrak
             return;
         }
 
+        const auto now = clock::now();
+        if (!poll_due(nextCommandAttempt_, now))
+        {
+            json_packet = jsonPacket_;
+            return;
+        }
+
         if (!initialized_)
         {
+            if (!poll_due(nextInitAttempt_, now))
+            {
+                json_packet = jsonPacket_;
+                return;
+            }
+
             if (config_.polling.readIdentityOnInit)
             {
                 if (!refresh_identity())
                 {
+                    schedule_poll(nextCommandAttempt_, now, timeout_cooldown);
+                    schedule_poll(nextInitAttempt_, now, init_retry_interval);
                     jsonPacket_ = build_json_packet();
                     json_packet = jsonPacket_;
                     return;
@@ -400,6 +447,8 @@ namespace module::drivers::dustrak
             {
                 if (!refresh_status())
                 {
+                    schedule_poll(nextCommandAttempt_, now, timeout_cooldown);
+                    schedule_poll(nextInitAttempt_, now, init_retry_interval);
                     jsonPacket_ = build_json_packet();
                     json_packet = jsonPacket_;
                     return;
@@ -407,12 +456,26 @@ namespace module::drivers::dustrak
             }
 
             initialized_ = true;
+
+            // Keep initial identity/status reads separate from normal polling so
+            // slower DustTrak units are not hit with duplicate back-to-back commands.
+            jsonPacket_ = build_json_packet();
+            json_packet = jsonPacket_;
+            return;
         }
 
         if (config_.polling.readIdentityOnInit && !identity_complete())
         {
+            if (!poll_due(nextInitAttempt_, now))
+            {
+                json_packet = jsonPacket_;
+                return;
+            }
+
             if (!refresh_identity())
             {
+                schedule_poll(nextCommandAttempt_, now, timeout_cooldown);
+                schedule_poll(nextInitAttempt_, now, init_retry_interval);
                 jsonPacket_ = build_json_packet();
                 json_packet = jsonPacket_;
                 return;
@@ -426,71 +489,103 @@ namespace module::drivers::dustrak
 
         if (config_.polling.autoStartMeasurement && !measurementStarted_)
         {
+            if (!poll_due(nextStartAttempt_, now))
+            {
+                json_packet = jsonPacket_;
+                return;
+            }
+
             if (!start_measurement())
             {
+                schedule_poll(nextCommandAttempt_, now, timeout_cooldown);
+                schedule_poll(nextStartAttempt_, now, start_retry_interval);
                 jsonPacket_ = build_json_packet();
                 json_packet = jsonPacket_;
                 return;
             }
+
+            schedule_poll(nextStatusPoll_, now, status_poll_interval);
         }
 
-        if (config_.polling.pollStatus)
+        if (config_.polling.pollStatus && poll_due(nextStatusPoll_, now))
         {
             if (!refresh_status())
             {
+                SPDLOG_WARN("MSTATUS failed during steady-state polling; pausing DustTrak command stream before next poll");
+                schedule_poll(nextCommandAttempt_, now, timeout_cooldown);
+                schedule_poll(nextStatusPoll_, now, timeout_cooldown);
                 jsonPacket_ = build_json_packet();
                 json_packet = jsonPacket_;
                 return;
             }
+            else
+            {
+                schedule_poll(nextStatusPoll_, now, status_poll_interval);
+            }
         }
 
-        if (config_.polling.pollMeasurementStats)
+        if (config_.polling.pollMeasurementStats && poll_due(nextMeasurementPoll_, now))
         {
             if (!read_measurement_statistics())
             {
+                schedule_poll(nextCommandAttempt_, now, timeout_cooldown);
+                schedule_poll(nextMeasurementPoll_, now, timeout_cooldown);
                 jsonPacket_ = build_json_packet();
                 json_packet = jsonPacket_;
                 return;
             }
+            schedule_poll(nextMeasurementPoll_, now, measurement_poll_interval);
         }
-        else if (config_.polling.pollMeasurements)
+        else if (config_.polling.pollMeasurements && poll_due(nextMeasurementPoll_, now))
         {
             if (!read_current_measurements())
             {
+                schedule_poll(nextCommandAttempt_, now, timeout_cooldown);
+                schedule_poll(nextMeasurementPoll_, now, timeout_cooldown);
                 jsonPacket_ = build_json_packet();
                 json_packet = jsonPacket_;
                 return;
             }
+            schedule_poll(nextMeasurementPoll_, now, measurement_poll_interval);
         }
 
-        if (config_.polling.pollFaultMessages)
+        if (config_.polling.pollFaultMessages && poll_due(nextFaultPoll_, now))
         {
             if (!read_fault_messages())
             {
+                schedule_poll(nextCommandAttempt_, now, timeout_cooldown);
+                schedule_poll(nextFaultPoll_, now, timeout_cooldown);
                 jsonPacket_ = build_json_packet();
                 json_packet = jsonPacket_;
                 return;
             }
+            schedule_poll(nextFaultPoll_, now, optional_poll_interval);
         }
 
-        if (config_.polling.pollAlarmMessages)
+        if (config_.polling.pollAlarmMessages && poll_due(nextAlarmPoll_, now))
         {
             if (!read_alarm_messages())
             {
+                schedule_poll(nextCommandAttempt_, now, timeout_cooldown);
+                schedule_poll(nextAlarmPoll_, now, timeout_cooldown);
                 jsonPacket_ = build_json_packet();
                 json_packet = jsonPacket_;
                 return;
             }
+            schedule_poll(nextAlarmPoll_, now, optional_poll_interval);
         }
 
-        if (config_.polling.pollLogInfo)
+        if (config_.polling.pollLogInfo && poll_due(nextLogInfoPoll_, now))
         {
             if (!read_logging_info())
             {
+                schedule_poll(nextCommandAttempt_, now, timeout_cooldown);
+                schedule_poll(nextLogInfoPoll_, now, timeout_cooldown);
                 jsonPacket_ = build_json_packet();
                 json_packet = jsonPacket_;
                 return;
             }
+            schedule_poll(nextLogInfoPoll_, now, optional_poll_interval);
         }
 
         jsonPacket_ = build_json_packet();
@@ -626,6 +721,7 @@ namespace module::drivers::dustrak
             state_.latestMeasurement.channelValuesMgPerM3.size(),
             state_.latestMeasurement.elapsedSeconds);
 
+        record_measurement_success();
         return true;
     }
 
@@ -676,6 +772,7 @@ namespace module::drivers::dustrak
 
         state_.latestMeasurementStats = stats;
         SPDLOG_INFO("RMMEASSTATS: {} channels at t={}s", stats.channels.size(), stats.elapsedSeconds);
+        record_measurement_success();
         return true;
     }
 
@@ -1176,17 +1273,20 @@ namespace module::drivers::dustrak
         if (!serialPort_->write(command + '\r'))
         {
             SPDLOG_ERROR("{}: write failed", command);
+            record_command_failure(command, "write_failed");
             return false;
         }
 
         if (!serialPort_->read_line(response))
         {
             SPDLOG_WARN("{}: timed out waiting for response", command);
+            record_command_failure(command, "timeout");
             return false;
         }
 
         response = trim(response);
         SPDLOG_INFO("DustTrak RX: {} -> {}", command, response);
+        record_command_success();
         return true;
     }
 
@@ -1297,6 +1397,24 @@ namespace module::drivers::dustrak
         return true;
     }
 
+    void drx85xx::record_command_success()
+    {
+        health_.consecutiveFailures = 0;
+    }
+
+    void drx85xx::record_command_failure(const std::string& command, const std::string& error)
+    {
+        ++health_.consecutiveFailures;
+        health_.lastFailedCommand = command;
+        health_.lastError = error;
+        health_.lastFailureTimestampMs = unix_timestamp_ms();
+    }
+
+    void drx85xx::record_measurement_success()
+    {
+        lastMeasurementTimestampMs_ = unix_timestamp_ms();
+    }
+
     void drx85xx::resync_after_unexpected_response(const std::string& command, const std::string& response)
     {
         SPDLOG_WARN("{}: unexpected response '{}', flushing RX to resync", command, response);
@@ -1304,6 +1422,16 @@ namespace module::drivers::dustrak
         {
             serialPort_->flush_rx();
         }
+    }
+
+    bool drx85xx::poll_due(const clock::time_point nextPoll, const clock::time_point now)
+    {
+        return nextPoll.time_since_epoch().count() == 0 || now >= nextPoll;
+    }
+
+    void drx85xx::schedule_poll(clock::time_point& nextPoll, const clock::time_point now, const std::chrono::milliseconds interval)
+    {
+        nextPoll = now + interval;
     }
 
     std::string drx85xx::build_json_packet() const

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "pes/modules/protocols/serial/serial.hpp"
+#include <chrono>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -180,6 +182,14 @@ namespace module::drivers::dustrak
             std::optional<zeroingStatus> latestZeroingStatus {};
         };
 
+        struct communicationHealth
+        {
+            int consecutiveFailures {0};
+            std::string lastFailedCommand {};
+            std::string lastError {};
+            std::int64_t lastFailureTimestampMs {0};
+        };
+
         drx85xx();
         ~drx85xx();
         drx85xx(const drx85xx&) = delete;
@@ -189,7 +199,9 @@ namespace module::drivers::dustrak
         void configure(const driverConfig& config);
         const driverConfig& config() const;
         const deviceState& state() const;
+        const communicationHealth& health() const;
         const std::string& json_packet() const;
+        std::int64_t last_measurement_timestamp_ms() const;
 
         void loop(std::string& json_packet);
 
@@ -236,15 +248,32 @@ namespace module::drivers::dustrak
         bool validate_firmware_response(const std::string& response) const;
         bool validate_status_response(const std::string& response) const;
         bool validate_measurement_response(const std::string& response) const;
+        void record_command_success();
+        void record_command_failure(const std::string& command, const std::string& error);
+        void record_measurement_success();
         void resync_after_unexpected_response(const std::string& command, const std::string& response);
         std::string build_json_packet() const;
+
+        using clock = std::chrono::steady_clock;
+        static bool poll_due(clock::time_point nextPoll, clock::time_point now);
+        static void schedule_poll(clock::time_point& nextPoll, clock::time_point now, std::chrono::milliseconds interval);
 
         module::protocols::serial::serialPort* serialPort_ {nullptr};
         driverConfig config_ {};
         deviceState state_ {};
+        communicationHealth health_ {};
         std::string jsonPacket_ {};
+        std::int64_t lastMeasurementTimestampMs_ {0};
         bool initialized_ {false};
         bool measurementStarted_ {false};
+        clock::time_point nextCommandAttempt_ {};
+        clock::time_point nextInitAttempt_ {};
+        clock::time_point nextStartAttempt_ {};
+        clock::time_point nextStatusPoll_ {};
+        clock::time_point nextMeasurementPoll_ {};
+        clock::time_point nextFaultPoll_ {};
+        clock::time_point nextAlarmPoll_ {};
+        clock::time_point nextLogInfoPoll_ {};
     };
 
 }

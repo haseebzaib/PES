@@ -34,8 +34,8 @@ namespace module::protocols::serial
         unsigned int charSize_ {8};
         parity parity_ {parity::None};
         stopBits stopBit_ {stopBits::One};
-        unsigned int startupSettleDelayMs_ {0};
-        unsigned int txPostWriteDelayMs_ {0};
+        unsigned int startupSettleDelayMs_ {500};
+        unsigned int txPostWriteDelayMs_ {500};
         unsigned int rxTimeoutMs_ {300};
     };
 

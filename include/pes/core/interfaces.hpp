@@ -4,6 +4,7 @@
 #include "pes/modules/protocols/modbus/modbus_client.hpp"
 #include "pes/modules/drivers/dustrak/drx_85xx.hpp"
 #include "chrono"
+#include "cstdint"
 #include "string"
 #include "string_view"
 #include "array"
@@ -88,6 +89,25 @@ namespace core
         module::drivers::dustrak::drx85xx dustTrak;
     };
 
+    struct runtimeMetricCache
+    {
+        std::string name {};
+        double value {0.0};
+        std::string unit {};
+        std::int64_t timestamp_ms {0};
+        bool has_value {false};
+    };
+
+    struct runtimeDeviceHealth
+    {
+        int consecutiveFailures {0};
+        std::int64_t lastSuccessTimestampMs {0};
+        std::int64_t lastFailureTimestampMs {0};
+        std::string lastFailedMetric {};
+        std::string lastError {};
+        std::string lastEventType {};
+    };
+
     struct modbusRtuRuntime
     {
         bool enabled {false};
@@ -96,6 +116,8 @@ namespace core
         module::protocols::modbus::client client_;
         std::chrono::steady_clock::time_point lastPoll {};
         std::vector<module::protocols::modbus::sample> samples {};
+        std::vector<runtimeMetricCache> metricCache {};
+        runtimeDeviceHealth health {};
     };
 
     struct modbusTcpRuntime
@@ -106,6 +128,8 @@ namespace core
         module::protocols::modbus::client client_;
         std::chrono::steady_clock::time_point lastPoll {};
         std::vector<module::protocols::modbus::sample> samples {};
+        std::vector<runtimeMetricCache> metricCache {};
+        runtimeDeviceHealth health {};
     };
 
     extern std::array<sensorRuntime, 4> sensors;

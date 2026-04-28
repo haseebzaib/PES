@@ -32,7 +32,7 @@ namespace module::protocols::modbus
         Little,
     };
 
-    struct kregisterConfig
+    struct registerConfig
     {
         std::string name {};
         registerType registerType_ {registerType::Holding};
@@ -98,6 +98,7 @@ namespace module::protocols::modbus
         bool connect_tcp(const tcpConfig& config);
         void disconnect();
         bool is_connected() const;
+        [[nodiscard]] bool connection_lost() const noexcept;
 
         bool poll(std::vector<sample>& outSamples);
         [[nodiscard]] const std::vector<readError>& last_errors() const noexcept;
@@ -110,6 +111,7 @@ namespace module::protocols::modbus
         std::vector<registerConfig> registers_ {};
         std::vector<readError> lastErrors_ {};
         std::string endpoint_ {};
+        bool connectionLost_ {false};
     };
 
 }
