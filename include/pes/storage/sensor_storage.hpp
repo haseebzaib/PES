@@ -99,6 +99,8 @@ public:
 private:
     static SqliteStorage::Config MakeSqliteConfig(const Config& config);
 
+    bool StoreSamplesOnce(const std::vector<SensorSampleRecord>& records);
+    bool StoreEventsOnce(const std::vector<SensorEventRecord>& records);
     bool InsertSample(const SensorSampleRecord& record);
     bool InsertEvent(const SensorEventRecord& record);
 

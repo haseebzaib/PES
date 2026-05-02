@@ -54,6 +54,48 @@ bool SensorStorage::StoreSamples(const std::vector<SensorSampleRecord>& records)
         return true;
     }
 
+    if (db_.EnsureReady() && StoreSamplesOnce(records))
+    {
+        return true;
+    }
+
+    SPDLOG_WARN("Sensor sample storage failed; attempting SQLite recovery path={}", config_.db_path);
+    if (!db_.Recover())
+    {
+        return false;
+    }
+
+    return StoreSamplesOnce(records);
+}
+
+bool SensorStorage::StoreEvent(const SensorEventRecord& record)
+{
+    return StoreEvents({record});
+}
+
+bool SensorStorage::StoreEvents(const std::vector<SensorEventRecord>& records)
+{
+    if (records.empty())
+    {
+        return true;
+    }
+
+    if (db_.EnsureReady() && StoreEventsOnce(records))
+    {
+        return true;
+    }
+
+    SPDLOG_WARN("Sensor event storage failed; attempting SQLite recovery path={}", config_.db_path);
+    if (!db_.Recover())
+    {
+        return false;
+    }
+
+    return StoreEventsOnce(records);
+}
+
+bool SensorStorage::StoreSamplesOnce(const std::vector<SensorSampleRecord>& records)
+{
     if (!db_.BeginImmediateTransaction())
     {
         return false;
@@ -74,21 +116,17 @@ bool SensorStorage::StoreSamples(const std::vector<SensorSampleRecord>& records)
         return false;
     }
 
-    return db_.RunRetentionPolicy();
-}
-
-bool SensorStorage::StoreEvent(const SensorEventRecord& record)
-{
-    return StoreEvents({record});
-}
-
-bool SensorStorage::StoreEvents(const std::vector<SensorEventRecord>& records)
-{
-    if (records.empty())
+    if (!db_.RunRetentionPolicy())
     {
-        return true;
+        SPDLOG_WARN("SQLite retention failed after storing samples; attempting recovery path={}", config_.db_path);
+        static_cast<void>(db_.Recover());
     }
 
+    return true;
+}
+
+bool SensorStorage::StoreEventsOnce(const std::vector<SensorEventRecord>& records)
+{
     if (!db_.BeginImmediateTransaction())
     {
         return false;
@@ -109,7 +147,13 @@ bool SensorStorage::StoreEvents(const std::vector<SensorEventRecord>& records)
         return false;
     }
 
-    return db_.RunRetentionPolicy();
+    if (!db_.RunRetentionPolicy())
+    {
+        SPDLOG_WARN("SQLite retention failed after storing events; attempting recovery path={}", config_.db_path);
+        static_cast<void>(db_.Recover());
+    }
+
+    return true;
 }
 
 SqliteStorage::Config SensorStorage::MakeSqliteConfig(const Config& config)

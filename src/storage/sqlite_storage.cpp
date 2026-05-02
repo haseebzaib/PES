@@ -17,6 +17,18 @@ std::uint64_t file_size_or_zero(const std::filesystem::path& path)
     const auto size = std::filesystem::file_size(path, error);
     return error ? 0U : static_cast<std::uint64_t>(size);
 }
+
+bool exists_no_error(const std::filesystem::path& path)
+{
+    std::error_code error;
+    return std::filesystem::exists(path, error) && !error;
+}
+
+void remove_no_error(const std::filesystem::path& path)
+{
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
 }
 
 SqliteStorage::SqliteStorage(Config config)
@@ -84,6 +96,31 @@ std::uint64_t SqliteStorage::CurrentDatabaseBytes() const
 {
     std::lock_guard<std::mutex> lock(db_mutex_);
     return CurrentDatabaseBytesUnlocked();
+}
+
+bool SqliteStorage::EnsureReady()
+{
+    std::lock_guard<std::mutex> lock(db_mutex_);
+
+    if (config_.db_path.empty())
+    {
+        SPDLOG_ERROR("SqliteStorage db_path is empty");
+        return false;
+    }
+
+    if (db_ != nullptr && exists_no_error(config_.db_path))
+    {
+        return true;
+    }
+
+    SPDLOG_WARN("SQLite database is not ready or backing file is missing path={}; recovering", config_.db_path);
+    return RecoverUnlocked();
+}
+
+bool SqliteStorage::Recover()
+{
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    return RecoverUnlocked();
 }
 
 bool SqliteStorage::Execute(const std::string_view sql)
@@ -226,6 +263,46 @@ void SqliteStorage::Close()
         sqlite3_close(db_);
         db_ = nullptr;
     }
+}
+
+bool SqliteStorage::RecoverUnlocked()
+{
+    const std::filesystem::path db_path(config_.db_path);
+    const bool main_file_missing = !exists_no_error(db_path);
+
+    Close();
+
+    if (main_file_missing)
+    {
+        remove_no_error(std::filesystem::path(config_.db_path + "-wal"));
+        remove_no_error(std::filesystem::path(config_.db_path + "-shm"));
+    }
+
+    if (!Open())
+    {
+        return false;
+    }
+
+    if (!ConfigurePragmas())
+    {
+        Close();
+        return false;
+    }
+
+    if (!CreateSchema())
+    {
+        Close();
+        return false;
+    }
+
+    if (!RunRetentionPolicyUnlocked())
+    {
+        Close();
+        return false;
+    }
+
+    SPDLOG_WARN("SQLite storage recovered path={}", config_.db_path);
+    return true;
 }
 
 bool SqliteStorage::ConfigurePragmas()

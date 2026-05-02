@@ -56,6 +56,9 @@ public:
     [[nodiscard]] const std::string& DbPath() const noexcept;
     [[nodiscard]] std::uint64_t CurrentDatabaseBytes() const;
 
+    bool EnsureReady();
+    bool Recover();
+
     bool Execute(std::string_view sql);
     bool ExecuteBatch(const std::vector<std::string>& statements);
     bool ExecutePrepared(std::string_view sql, StatementBinder binder = {});
@@ -71,6 +74,7 @@ public:
 private:
     bool Open();
     void Close();
+    bool RecoverUnlocked();
     bool ConfigurePragmas();
     bool CreateSchema();
 
